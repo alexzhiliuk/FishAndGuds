@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+compose.yml
+.venv/
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.db
+.idea/
+.vscode/
+assets-contact-sheet.jpg
