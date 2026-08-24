@@ -2,7 +2,7 @@ from datetime import datetime
 
 from app.cache import RedisJsonCache
 from app.integrations.iiko.client import IikoClient
-from app.integrations.iiko.dto import IikoOrganization
+from app.integrations.iiko.dto import CustomerCreate, IikoOrganization
 
 
 class CachedIikoClient(IikoClient):
@@ -26,8 +26,11 @@ class CachedIikoClient(IikoClient):
         await self.cache.set(self.ORGANIZATIONS_KEY, [item.model_dump(by_alias=True, mode="json") for item in items], self.organizations_ttl)
         return items
 
-    async def get_customer_info(self, *, organization_id: str, phone: str | None = None, customer_id: str | None = None):
-        return await self.backend.get_customer_info(organization_id=organization_id, phone=phone, customer_id=customer_id)
+    async def get_customer_info(self, *, organization_id: str, phone: str | None = None, customer_id: str | None = None, card_number: str | None = None):
+        return await self.backend.get_customer_info(organization_id=organization_id, phone=phone, customer_id=customer_id, card_number=card_number)
+
+    async def create_or_update_customer(self, *, organization_id: str, customer: CustomerCreate) -> str:
+        return await self.backend.create_or_update_customer(organization_id=organization_id, customer=customer)
 
     async def add_card(self, *, customer_id: str, card_track: str, card_number: str, organization_id: str) -> None:
         await self.backend.add_card(customer_id=customer_id, card_track=card_track, card_number=card_number, organization_id=organization_id)

@@ -1,21 +1,20 @@
 import logging
-import re
-from datetime import datetime
 from pathlib import Path
 
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove
+from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards.common import (action_keyboard, back_keyboard, main_menu, notifications_keyboard,
+from app.bot.keyboards.common import (action_keyboard, back_keyboard, legal_documents_keyboard, main_menu, notifications_keyboard,
                                       phone_keyboard, profile_keyboard, purchases_keyboard, restaurant_keyboard,
-                                      registration_confirm, registration_consent, registration_skip)
+                                      registration_web_app_keyboard)
 from app.bot.states import RegistrationForm
 from app.config import Settings
 from app.integrations.iiko.client import IikoClient
-from app.services import LoyaltyService, NotificationService, PurchaseService, RegistrationService, RestaurantService
+from app.services import ApplicationSettingsService, LoyaltyService, NotificationService, PurchaseService, RegistrationService, RegistrationSubmission, RestaurantService
 
 router = Router(name="user")
 logger = logging.getLogger(__name__)
@@ -75,7 +74,7 @@ async def send_registration_prompt(message: Message, settings: Settings):
 
 
 def registration_service(session, iiko, settings):
-    return RegistrationService(session, iiko, default_organization_id=settings.iiko_default_organization_id, history_days=settings.iiko_transaction_history_days, page_size=settings.iiko_transaction_page_size)
+    return RegistrationService(session, iiko, default_organization_id=settings.iiko_default_organization_id, history_days=settings.iiko_transaction_history_days, page_size=settings.iiko_transaction_page_size, card_number_prefix=settings.iiko_card_number_prefix, card_number_length=settings.iiko_card_number_length, card_generation_attempts=settings.iiko_card_generation_attempts)
 
 
 async def send_profile(message: Message, user_id: int, session: AsyncSession, settings: Settings, iiko: IikoClient | None = None):
@@ -115,86 +114,41 @@ async def register(message: Message, state: FSMContext, session: AsyncSession, i
             await message.answer("Карта найдена и подключена! Добро пожаловать!")
             await send_main_menu(message, message.from_user.id, settings); return
         await state.clear(); await state.update_data(phone=message.contact.phone_number, iiko_available=result.iiko_available)
-        await state.set_state(RegistrationForm.first_name)
-        await message.answer("Введите имя:")
+        await state.set_state(RegistrationForm.mini_app)
+        await message.answer(
+            "Гость с таким номером не найден в iiko. Заполните короткую анкету:",
+            reply_markup=registration_web_app_keyboard(settings.registration_web_app_url),
+        )
     except Exception:
         logger.exception("Registration failed"); await message.answer("Не удалось получить данные. Попробуйте ещё раз позже.")
 
 
-@router.message(RegistrationForm.first_name)
-async def registration_first_name(message: Message, state: FSMContext):
-    if not message.text or not message.text.strip(): await message.answer("Введите имя текстом:"); return
-    await state.update_data(first_name=message.text.strip()); await state.set_state(RegistrationForm.last_name); await message.answer("Введите фамилию:")
-
-
-@router.message(RegistrationForm.last_name)
-async def registration_last_name(message: Message, state: FSMContext):
-    if not message.text or not message.text.strip(): await message.answer("Введите фамилию текстом:"); return
-    await state.update_data(last_name=message.text.strip()); await state.set_state(RegistrationForm.middle_name); await message.answer("Введите отчество или пропустите:", reply_markup=registration_skip("middle_name"))
-
-
-async def ask_birthday(target, state):
-    await state.set_state(RegistrationForm.birthday); await target.answer("Введите дату рождения в формате ДД.ММ.ГГГГ:")
-
-
-@router.message(RegistrationForm.middle_name)
-async def registration_middle(message: Message, state: FSMContext):
-    await state.update_data(middle_name=(message.text or "").strip() or None); await ask_birthday(message, state)
-
-
-@router.callback_query(RegistrationForm.middle_name, F.data == "registration:skip:middle_name")
-async def registration_middle_skip(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(middle_name=None); await ask_birthday(callback.message, state); await callback.answer()
-
-
-@router.message(RegistrationForm.birthday)
-async def registration_birthday(message: Message, state: FSMContext):
+@router.message(RegistrationForm.mini_app, F.web_app_data)
+async def registration_complete(message: Message, state: FSMContext, session: AsyncSession, iiko: IikoClient, settings: Settings):
     try:
-        value = datetime.strptime((message.text or "").strip(), "%d.%m.%Y").date()
-        if value >= datetime.now().date(): raise ValueError
-    except ValueError: await message.answer("Некорректная дата. Используйте формат ДД.ММ.ГГГГ:"); return
-    await state.update_data(birthday=value.isoformat()); await state.set_state(RegistrationForm.email); await message.answer("Введите email или пропустите:", reply_markup=registration_skip("email"))
-
-
-async def ask_consent(target, state):
-    await state.set_state(RegistrationForm.consent); await target.answer("Для регистрации нужно согласие на обработку персональных данных.", reply_markup=registration_consent())
-
-
-@router.message(RegistrationForm.email)
-async def registration_email(message: Message, state: FSMContext):
-    email = (message.text or "").strip()
-    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email): await message.answer("Некорректный email. Введите снова или нажмите «Пропустить»:", reply_markup=registration_skip("email")); return
-    await state.update_data(email=email); await ask_consent(message, state)
-
-
-@router.callback_query(RegistrationForm.email, F.data == "registration:skip:email")
-async def registration_email_skip(callback: CallbackQuery, state: FSMContext):
-    await state.update_data(email=None); await ask_consent(callback.message, state); await callback.answer()
-
-
-@router.callback_query(RegistrationForm.consent, F.data == "registration:consent:no")
-async def registration_consent_no(callback: CallbackQuery, state: FSMContext):
-    await state.clear(); await callback.message.answer("Без согласия регистрация невозможна. Для повторной попытки нажмите /start."); await callback.answer()
-
-
-@router.callback_query(RegistrationForm.consent, F.data == "registration:consent:yes")
-async def registration_consent_yes(callback: CallbackQuery, state: FSMContext):
-    data = await state.get_data(); await state.update_data(consent=True); await state.set_state(RegistrationForm.confirm)
-    middle = f" {data['middle_name']}" if data.get('middle_name') else ""
-    await callback.message.answer(f"Проверьте данные:\n\n{data['last_name']} {data['first_name']}{middle}\nДата рождения: {datetime.fromisoformat(data['birthday']):%d.%m.%Y}\nEmail: {data.get('email') or 'не указан'}\nТелефон: {data['phone']}", reply_markup=registration_confirm()); await callback.answer()
-
-
-@router.callback_query(RegistrationForm.confirm, F.data == "registration:edit")
-async def registration_edit(callback: CallbackQuery, state: FSMContext):
-    await state.set_state(RegistrationForm.first_name); await callback.message.answer("Введите имя заново:"); await callback.answer()
-
-
-@router.callback_query(RegistrationForm.confirm, F.data == "registration:confirm")
-async def registration_complete(callback: CallbackQuery, state: FSMContext, session: AsyncSession, iiko: IikoClient, settings: Settings):
+        form = RegistrationSubmission.model_validate_json(message.web_app_data.data)
+    except ValidationError:
+        await message.answer("Анкета содержит некорректные данные. Откройте её и проверьте обязательные поля.")
+        return
     data = await state.get_data()
-    user = await registration_service(session, iiko, settings).complete(telegram_id=callback.from_user.id, phone=data['phone'], first_name=data['first_name'], last_name=data['last_name'], middle_name=data.get('middle_name'), birthday=datetime.fromisoformat(data['birthday']).date(), email=data.get('email'), consent=True)
+    user = await registration_service(session, iiko, settings).complete(
+        telegram_id=message.from_user.id,
+        phone=data["phone"],
+        first_name=form.first_name,
+        last_name=form.last_name,
+        middle_name=form.middle_name,
+        birthday=form.birthday,
+        gender=form.gender,
+        email=form.email,
+        sms_enabled=form.sms_enabled,
+        push_enabled=form.push_enabled,
+        email_enabled=form.email_enabled,
+        consent=form.consent,
+    )
     pending = user.loyalty_account.iiko_sync_status.value != "synced"
-    await state.clear(); await callback.message.answer("Регистрация завершена." + (" Данные iiko синхронизируются автоматически." if pending else " Карта подключена.")); await send_main_menu(callback.message, callback.from_user.id, settings); await callback.answer()
+    await state.clear()
+    await message.answer("Регистрация завершена." + (" Данные iiko синхронизируются автоматически." if pending else " Карта подключена."), reply_markup=ReplyKeyboardRemove())
+    await send_main_menu(message, message.from_user.id, settings)
 
 
 @router.message(F.text == "👤 Личный кабинет")
@@ -264,8 +218,12 @@ async def purchases(callback: CallbackQuery, session: AsyncSession, settings: Se
 
 
 @router.callback_query(F.data == "profile:terms")
-async def terms(callback: CallbackQuery):
-    await callback.message.answer("📜 Бонусами можно оплачивать покупки по правилам программы ресторана. Актуальные ограничения и срок действия бонусов уточняйте у администратора.", reply_markup=back_keyboard("nav:profile")); await callback.answer()
+async def terms(callback: CallbackQuery, session: AsyncSession):
+    links = await ApplicationSettingsService(session).registration_links()
+    await callback.message.answer(
+        "📜 Документы программы лояльности",
+        reply_markup=legal_documents_keyboard(links[ApplicationSettingsService.PRIVACY_POLICY_URL], links[ApplicationSettingsService.LOYALTY_RULES_URL]),
+    ); await callback.answer()
 
 
 @router.callback_query(F.data == "notifications:show")

@@ -7,7 +7,7 @@ from typing import Any
 import httpx
 
 from app.integrations.iiko.client import IikoClient
-from app.integrations.iiko.dto import CustomerInfo, IikoOrganization, LoyaltyTransaction
+from app.integrations.iiko.dto import CustomerCreate, CustomerInfo, IikoOrganization, LoyaltyTransaction
 from app.integrations.iiko.exceptions import IikoAuthenticationError, IikoRequestError, IikoUnavailableError
 
 logger = logging.getLogger(__name__)
@@ -66,13 +66,29 @@ class RealIikoClient(IikoClient):
         data = await self._request("/api/1/organizations", {"returnAdditionalInfo": True, "includeDisabled": True})
         return [IikoOrganization.model_validate({**item, "is_active": not item.get("isDisabled", False)}) for item in data.get("organizations", [])]
 
-    async def get_customer_info(self, *, organization_id: str, phone: str | None = None, customer_id: str | None = None):
-        payload = {"organizationId": organization_id, "type": "phone" if phone else "id", "phone" if phone else "id": phone or customer_id}
+    async def get_customer_info(self, *, organization_id: str, phone: str | None = None, customer_id: str | None = None, card_number: str | None = None):
+        criteria = [("phone", phone), ("id", customer_id), ("cardNumber", card_number)]
+        selected = [(kind, value) for kind, value in criteria if value is not None]
+        if len(selected) != 1:
+            raise ValueError("Exactly one customer lookup criterion is required")
+        criterion, value = selected[0]
+        payload = {"organizationId": organization_id, "type": criterion, criterion: value}
         try: data = await self._request("/api/1/loyalty/iiko/customer/info", payload)
         except IikoRequestError as exc:
             if exc.status_code in (400, 404): return None
             raise
         return CustomerInfo.model_validate(data)
+
+    async def create_or_update_customer(self, *, organization_id: str, customer: CustomerCreate) -> str:
+        payload = customer.model_dump(by_alias=True, mode="json", exclude_none=True)
+        if customer.birthday is not None:
+            payload["birthday"] = customer.birthday.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        payload["organizationId"] = organization_id
+        data = await self._request("/api/1/loyalty/iiko/customer/create_or_update", payload)
+        customer_id = data.get("id")
+        if not customer_id:
+            raise IikoRequestError("iiko customer creation returned no id")
+        return str(customer_id)
 
     async def add_card(self, *, customer_id: str, card_track: str, card_number: str, organization_id: str):
         await self._request("/api/1/loyalty/iiko/customer/card/add", {"customerId": customer_id, "cardTrack": card_track, "cardNumber": card_number, "organizationId": organization_id})

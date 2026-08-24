@@ -4,7 +4,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models import (LoyaltyAccount, LoyaltyTransaction, Mailing, MailingRun, NotificationSettings,
+from app.models import (ApplicationSetting, LoyaltyAccount, LoyaltyTransaction, Mailing, MailingRun, NotificationSettings,
                         Purchase, Restaurant, User)
 from app.models.entities import IikoSyncStatus, MailingStatus
 
@@ -21,10 +21,10 @@ class UserRepository:
     async def by_phone(self, phone: str):
         return await self.session.scalar(select(User).where(User.phone == phone).options(*self._loaded()))
 
-    async def create_local(self, *, telegram_id: int, phone: str, first_name: str, last_name: str | None, middle_name: str | None = None, birthday: date | None = None, email: str | None = None, consent_at: datetime | None = None, sync_status: IikoSyncStatus = IikoSyncStatus.pending):
-        user = User(telegram_id=telegram_id, phone=phone, first_name=first_name, last_name=last_name, middle_name=middle_name, birthday=birthday, email=email, personal_data_consent_at=consent_at)
+    async def create_local(self, *, telegram_id: int, phone: str, first_name: str, last_name: str | None, middle_name: str | None = None, birthday: date | None = None, gender: str | None = None, email: str | None = None, consent_at: datetime | None = None, sync_status: IikoSyncStatus = IikoSyncStatus.pending, sms_enabled: bool = True, push_enabled: bool = True, email_enabled: bool = True):
+        user = User(telegram_id=telegram_id, phone=phone, first_name=first_name, last_name=last_name, middle_name=middle_name, birthday=birthday, gender=gender, email=email, personal_data_consent_at=consent_at)
         user.loyalty_account = LoyaltyAccount(last_known_balance=0, iiko_sync_status=sync_status, categories=[])
-        user.notification_settings = NotificationSettings()
+        user.notification_settings = NotificationSettings(sms_enabled=sms_enabled, push_enabled=push_enabled, email_enabled=email_enabled)
         self.session.add(user); await self.session.flush(); return user
 
     async def active(self):
@@ -36,8 +36,23 @@ class UserRepository:
         return list((await self.session.scalars(stmt)).all())
 
     async def birthdays(self, day: int, month: int):
-        stmt = select(User).join(NotificationSettings).where(User.is_active.is_(True), NotificationSettings.holidays_enabled.is_(True), func.extract("day", User.birthday) == day, func.extract("month", User.birthday) == month)
+        stmt = select(User).join(NotificationSettings).where(User.is_active.is_(True), NotificationSettings.holidays_enabled.is_(True), func.extract("day", User.birthday) == day, func.extract("month", User.birthday) == month).options(*self._loaded())
         return list((await self.session.scalars(stmt)).all())
+
+
+class ApplicationSettingRepository:
+    def __init__(self, session: AsyncSession): self.session = session
+    async def get(self, key: str): return await self.session.get(ApplicationSetting, key)
+    async def values(self, keys: tuple[str, ...]):
+        rows = await self.session.scalars(select(ApplicationSetting).where(ApplicationSetting.key.in_(keys)))
+        return {item.key: item.value for item in rows}
+    async def set(self, key: str, value: str | None):
+        item = await self.get(key)
+        if item is None:
+            item = ApplicationSetting(key=key, value=value); self.session.add(item)
+        else:
+            item.value = value
+        await self.session.flush(); return item
 
 
 class LoyaltyAccountRepository:

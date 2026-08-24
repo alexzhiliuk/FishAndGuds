@@ -82,6 +82,7 @@ async def main():
             webhook_path=settings.telegram_webhook_path,
             webhook_secret=settings.telegram_webhook_secret,
             cache=cache,
+            session_factory=factory,
         )
         server = uvicorn.Server(uvicorn.Config(api, host=settings.api_host, port=settings.api_port, log_level=settings.log_level.lower()))
         api_task = asyncio.create_task(server.serve())

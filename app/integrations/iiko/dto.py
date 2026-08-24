@@ -72,6 +72,19 @@ class CustomerInfo(IikoDTO):
         return Decimal("0")
 
 
+class CustomerCreate(IikoDTO):
+    phone: str
+    name: str
+    surname: str | None = Field(None, alias="surName")
+    middle_name: str | None = Field(None, alias="middleName")
+    birthday: datetime | None = None
+    email: str | None = None
+    sex: int = 0
+    consent_status: int = Field(1, alias="consentStatus")
+    should_receive_loyalty_info: bool = Field(True, alias="shouldReceiveLoyaltyInfo")
+    should_receive_promo_actions_info: bool = Field(True, alias="shouldReceivePromoActionsInfo")
+
+
 class LoyaltyTransaction(IikoDTO):
     id: str
     revision: int

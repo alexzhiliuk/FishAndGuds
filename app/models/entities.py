@@ -24,6 +24,12 @@ class RunStatus(str, enum.Enum):
     sending = "sending"; sent = "sent"; failed = "failed"
 
 
+class ApplicationSetting(Base, TimestampMixin):
+    __tablename__ = "application_settings"
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str | None] = mapped_column(String(1000))
+
+
 class User(Base, TimestampMixin):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -33,6 +39,7 @@ class User(Base, TimestampMixin):
     last_name: Mapped[str | None] = mapped_column(String(100))
     middle_name: Mapped[str | None] = mapped_column(String(100))
     birthday: Mapped[date | None] = mapped_column(Date)
+    gender: Mapped[str | None] = mapped_column(String(16))
     email: Mapped[str | None] = mapped_column(String(254))
     personal_data_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -128,6 +135,9 @@ class NotificationSettings(Base):
     promotions_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     news_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     holidays_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    sms_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    email_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     user: Mapped[User] = relationship(back_populates="notification_settings")
 

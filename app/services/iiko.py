@@ -1,13 +1,13 @@
 import logging
 from decimal import Decimal
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from secrets import randbelow
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.iiko.client import IikoClient
-from app.integrations.iiko.dto import CustomerInfo, LoyaltyTransaction
-from app.integrations.iiko.exceptions import IikoError
+from app.integrations.iiko.dto import CustomerCreate, CustomerInfo, LoyaltyTransaction
+from app.integrations.iiko.exceptions import IikoError, IikoRequestError
 from app.models.entities import IikoSyncStatus
 from app.repositories import LoyaltyAccountRepository, LoyaltyTransactionRepository, PurchaseRepository, RestaurantRepository
 from app.services.phone import PhoneNormalizationService
@@ -50,15 +50,63 @@ class CustomerService:
     async def find_or_create_customer(self, user):
         customer = await self.get_by_phone(user.phone)
         if customer is None:
-            raise IikoError("iiko customer creation is temporarily disabled")
+            notifications = user.notification_settings
+            receives_external_messages = bool(
+                notifications is None or notifications.sms_enabled or notifications.email_enabled
+            )
+            customer_id = await self.iiko.create_or_update_customer(
+                organization_id=self.default_organization_id,
+                customer=CustomerCreate(
+                    phone=user.phone,
+                    name=user.first_name,
+                    surName=user.last_name,
+                    middleName=user.middle_name,
+                    birthday=datetime.combine(user.birthday, time.min) if user.birthday else None,
+                    email=user.email,
+                    sex={"male": 1, "female": 2}.get(user.gender, 0),
+                    consentStatus=1,
+                    shouldReceiveLoyaltyInfo=receives_external_messages,
+                    shouldReceivePromoActionsInfo=receives_external_messages,
+                ),
+            )
+            customer = await self.iiko.get_customer_info(
+                organization_id=self.default_organization_id,
+                customer_id=customer_id,
+            )
+            if customer is None:
+                raise IikoError("iiko customer was created but could not be read back")
         return await self.sync_customer(user, customer)
 
 
 class CardService:
-    def __init__(self, session: AsyncSession, iiko: IikoClient, default_organization_id: str): self.session, self.iiko, self.default_organization_id = session, iiko, default_organization_id
+    def __init__(self, session: AsyncSession, iiko: IikoClient, default_organization_id: str, *, number_prefix: str = "9898", number_length: int = 8, generation_attempts: int = 10):
+        if not number_prefix.isdigit() or number_length <= len(number_prefix):
+            raise ValueError("Invalid loyalty card number format")
+        if generation_attempts < 1:
+            raise ValueError("Card generation attempts must be positive")
+        self.session, self.iiko, self.default_organization_id = session, iiko, default_organization_id
+        self.number_prefix, self.number_length, self.generation_attempts = number_prefix, number_length, generation_attempts
 
-    @staticmethod
-    def _new_card_number(): return str(10**15 + randbelow(9 * 10**15))
+    def _new_card_number(self):
+        suffix_length = self.number_length - len(self.number_prefix)
+        return f"{self.number_prefix}{randbelow(10 ** suffix_length):0{suffix_length}d}"
+
+    async def _organization_ids(self):
+        ids = [self.default_organization_id]
+        for organization in await self.iiko.get_organizations():
+            if organization.id not in ids:
+                ids.append(organization.id)
+        return ids
+
+    async def _find_card_owner(self, number: str):
+        for organization_id in await self._organization_ids():
+            customer = await self.iiko.get_customer_info(
+                organization_id=organization_id,
+                card_number=number,
+            )
+            if customer is not None:
+                return customer
+        return None
 
     async def sync_card(self, user, customer: CustomerInfo):
         account = user.loyalty_account
@@ -72,15 +120,37 @@ class CardService:
         if customer.cards:
             await self.sync_card(user, customer); return customer
         account_repo = LoyaltyAccountRepository(self.session)
-        for _ in range(10):
+        for _ in range(self.generation_attempts):
             number = self._new_card_number()
-            if await account_repo.by_card_number(number) is None: break
-        else: raise RuntimeError("Could not generate a unique loyalty card number")
-        track = number
-        await self.iiko.add_card(customer_id=customer.id, card_track=track, card_number=number, organization_id=self.default_organization_id)
-        refreshed = await self.iiko.get_customer_info(organization_id=self.default_organization_id, customer_id=customer.id)
-        if refreshed: await self.sync_card(user, refreshed); return refreshed
-        return customer
+            if await account_repo.by_card_number(number) is not None:
+                continue
+            owner = await self._find_card_owner(number)
+            if owner is not None:
+                if owner.id == customer.id:
+                    await self.sync_card(user, owner)
+                    return owner
+                continue
+            try:
+                await self.iiko.add_card(
+                    customer_id=customer.id,
+                    card_track=number,
+                    card_number=number,
+                    organization_id=self.default_organization_id,
+                )
+            except IikoRequestError as exc:
+                if exc.status_code not in (400, 409):
+                    raise
+                owner = await self._find_card_owner(number)
+                if owner is None:
+                    raise
+                if owner.id != customer.id:
+                    continue
+            refreshed = await self.iiko.get_customer_info(organization_id=self.default_organization_id, customer_id=customer.id)
+            if refreshed and refreshed.cards:
+                await self.sync_card(user, refreshed)
+                return refreshed
+            raise IikoError("iiko card was added but could not be read back")
+        raise IikoError("Could not generate a globally unique iiko loyalty card number")
 
 
 class RestaurantSyncService:

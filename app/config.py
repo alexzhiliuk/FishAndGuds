@@ -1,8 +1,9 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated
+from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -23,6 +24,9 @@ class Settings(BaseSettings):
     iiko_timeout_seconds: float = 15.0
     iiko_transaction_history_days: int = 365
     iiko_transaction_page_size: int = 100
+    iiko_card_number_prefix: str = "9898"
+    iiko_card_number_length: int = 8
+    iiko_card_generation_attempts: int = 10
     purchase_sync_interval_minutes: int = 5
     timezone: str = "Europe/Minsk"
     log_level: str = "INFO"
@@ -48,6 +52,26 @@ class Settings(BaseSettings):
         if not value.startswith("/"):
             raise ValueError("TELEGRAM_WEBHOOK_PATH must start with /")
         return value
+
+    @field_validator("iiko_card_number_prefix")
+    @classmethod
+    def validate_card_prefix(cls, value: str):
+        if not value.isdigit():
+            raise ValueError("IIKO_CARD_NUMBER_PREFIX must contain digits only")
+        return value
+
+    @model_validator(mode="after")
+    def validate_card_format(self):
+        if self.iiko_card_number_length <= len(self.iiko_card_number_prefix):
+            raise ValueError("IIKO_CARD_NUMBER_LENGTH must be greater than the prefix length")
+        if self.iiko_card_generation_attempts < 1:
+            raise ValueError("IIKO_CARD_GENERATION_ATTEMPTS must be positive")
+        return self
+
+    @property
+    def registration_web_app_url(self) -> str:
+        parsed = urlsplit(self.telegram_webhook_url)
+        return urlunsplit((parsed.scheme, parsed.netloc, "/registration", "", ""))
 
 
 @lru_cache
