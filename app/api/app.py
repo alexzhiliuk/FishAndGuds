@@ -1,13 +1,16 @@
 import hmac
 import logging
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import FileResponse
 from pydantic import ValidationError
 
 from app.cache import RedisJsonCache
+from app.services import ApplicationSettingsService
 
 logger = logging.getLogger(__name__)
 TELEGRAM_UPDATE_DEDUP_TTL_SECONDS = 86_400
@@ -20,12 +23,31 @@ def create_api(
     webhook_path: str = "/telegram/webhook",
     webhook_secret: str | None = None,
     cache: RedisJsonCache | None = None,
+    session_factory=None,
 ) -> FastAPI:
     api = FastAPI(title="Restaurant Loyalty Bot", version="1.0.0")
 
     @api.get("/healthz")
     async def health():
         return {"status": "ok"}
+
+    @api.get("/registration", include_in_schema=False)
+    async def registration_page():
+        return FileResponse(
+            Path(__file__).resolve().parent.parent / "web" / "registration.html",
+            media_type="text/html",
+            headers={"Cache-Control": "no-store"},
+        )
+
+    if session_factory is not None:
+        @api.get("/registration/config", include_in_schema=False)
+        async def registration_config():
+            async with session_factory() as session:
+                links = await ApplicationSettingsService(session).registration_links()
+            return {
+                "privacy_policy_url": links[ApplicationSettingsService.PRIVACY_POLICY_URL],
+                "loyalty_rules_url": links[ApplicationSettingsService.LOYALTY_RULES_URL],
+            }
 
     if cache is not None:
         @api.get("/readyz")

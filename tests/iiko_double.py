@@ -4,8 +4,8 @@ from hashlib import sha256
 from uuid import uuid4
 
 from app.integrations.iiko.client import IikoClient
-from app.integrations.iiko.dto import CustomerCard, CustomerInfo, IikoOrganization, LoyaltyTransaction, WalletBalance
-from app.integrations.iiko.exceptions import IikoUnavailableError
+from app.integrations.iiko.dto import CustomerCard, CustomerCreate, CustomerInfo, IikoOrganization, LoyaltyTransaction, WalletBalance
+from app.integrations.iiko.exceptions import IikoRequestError, IikoUnavailableError
 
 
 class IikoTestDouble(IikoClient):
@@ -16,6 +16,7 @@ class IikoTestDouble(IikoClient):
         self.not_found_phones = not_found_phones or set()
         self.unavailable = unavailable
         self.customers: dict[str, CustomerInfo] = {}
+        self.create_customer_calls = 0
         self.add_card_calls = 0
 
     def _check(self):
@@ -35,19 +36,44 @@ class IikoTestDouble(IikoClient):
 
     def seed_customer(self, phone: str, *, balance: Decimal | None = Decimal("300"), with_card: bool = True):
         fingerprint = self._fingerprint(phone)
-        customer = CustomerInfo(id=f"test-customer-{fingerprint}", name="Иван", surname="Иванов", phone=phone, birthday="2000-04-01", cards=[CustomerCard(id=f"card-{fingerprint}", track=fingerprint, number=str(int(fingerprint, 16) % 1_000_000_000_000).zfill(12))] if with_card else [], walletBalances=[] if balance is None else [WalletBalance(id="bonus-wallet", name="Бонусная программа", type=1, balance=balance)], whenRegistered="2026-01-01T00:00:00Z")
+        card_number = f"9898{int(fingerprint, 16) % 10_000:04d}"
+        customer = CustomerInfo(id=f"test-customer-{fingerprint}", name="Иван", surname="Иванов", phone=phone, birthday="2000-04-01", cards=[CustomerCard(id=f"card-{fingerprint}", track=card_number, number=card_number)] if with_card else [], walletBalances=[] if balance is None else [WalletBalance(id="bonus-wallet", name="Бонусная программа", type=1, balance=balance)], whenRegistered="2026-01-01T00:00:00Z")
         self.customers[phone] = customer
         return customer
 
-    async def get_customer_info(self, *, organization_id: str, phone: str | None = None, customer_id: str | None = None):
+    async def get_customer_info(self, *, organization_id: str, phone: str | None = None, customer_id: str | None = None, card_number: str | None = None):
         self._check()
         if phone:
             if phone in self.not_found_phones and phone not in self.customers: return None
             return self.customers.get(phone) or self.seed_customer(phone)
+        if card_number:
+            return next((item for item in self.customers.values() if any(card.number == card_number for card in item.cards)), None)
         return next((item for item in self.customers.values() if item.id == customer_id), None)
+
+    async def create_or_update_customer(self, *, organization_id: str, customer: CustomerCreate) -> str:
+        self._check(); self.create_customer_calls += 1
+        existing = self.customers.get(customer.phone)
+        if existing:
+            return existing.id
+        customer_id = f"test-created-{self._fingerprint(customer.phone)}"
+        self.customers[customer.phone] = CustomerInfo(
+            id=customer_id,
+            phone=customer.phone,
+            name=customer.name,
+            surname=customer.surname,
+            middleName=customer.middle_name,
+            birthday=customer.birthday,
+            email=customer.email,
+            cards=[],
+            walletBalances=[],
+            whenRegistered="2026-08-24T00:00:00Z",
+        )
+        return customer_id
 
     async def add_card(self, *, customer_id: str, card_track: str, card_number: str, organization_id: str):
         self._check(); self.add_card_calls += 1
+        if any(card.number == card_number for item in self.customers.values() for card in item.cards):
+            raise IikoRequestError("Duplicate card", status_code=409)
         customer = next(item for item in self.customers.values() if item.id == customer_id)
         if not customer.cards: customer.cards.append(CustomerCard(id=str(uuid4()), track=card_track, number=card_number))
 

@@ -1,20 +1,16 @@
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, WebAppInfo
 
 
 def phone_keyboard():
     return ReplyKeyboardMarkup(keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]], resize_keyboard=True, one_time_keyboard=True)
 
 
-def registration_skip(field: str):
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="Пропустить", callback_data=f"registration:skip:{field}")]])
-
-
-def registration_consent():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Согласен", callback_data="registration:consent:yes")], [InlineKeyboardButton(text="❌ Не согласен", callback_data="registration:consent:no")]])
-
-
-def registration_confirm():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Всё верно", callback_data="registration:confirm")], [InlineKeyboardButton(text="✏️ Изменить", callback_data="registration:edit")]])
+def registration_web_app_keyboard(url: str):
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📝 Заполнить анкету", web_app=WebAppInfo(url=url))]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
 
 
 def main_menu(is_admin: bool = False):
@@ -38,9 +34,23 @@ def profile_keyboard():
     return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="▣ Показать QR", callback_data="profile:qr"), InlineKeyboardButton(text="🧾 История покупок", callback_data="purchases:0")], [InlineKeyboardButton(text="🔔 Уведомления", callback_data="notifications:show")], [InlineKeyboardButton(text="📜 Условия программы", callback_data="profile:terms")], [InlineKeyboardButton(text="⬅️ Назад", callback_data="profile:main")]])
 
 
+def legal_documents_keyboard(privacy_url: str | None, rules_url: str | None):
+    rows = []
+    if privacy_url: rows.append([InlineKeyboardButton(text="🔒 Политика обработки данных", url=privacy_url)])
+    if rules_url: rows.append([InlineKeyboardButton(text="📜 Правила программы лояльности", url=rules_url)])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:profile")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def notifications_keyboard(settings):
     mark=lambda value: "✅" if value else "❌"
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"Акции {mark(settings.promotions_enabled)}", callback_data="notify:promotions")], [InlineKeyboardButton(text=f"Новости {mark(settings.news_enabled)}", callback_data="notify:news")], [InlineKeyboardButton(text=f"Праздники {mark(settings.holidays_enabled)}", callback_data="notify:holidays")], [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:profile")]])
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"Акции {mark(settings.promotions_enabled)}", callback_data="notify:promotions")],
+        [InlineKeyboardButton(text=f"Новости {mark(settings.news_enabled)}", callback_data="notify:news")],
+        [InlineKeyboardButton(text=f"Праздники {mark(settings.holidays_enabled)}", callback_data="notify:holidays")],
+        [InlineKeyboardButton(text=f"СМС {mark(settings.sms_enabled)}", callback_data="notify:sms"), InlineKeyboardButton(text=f"PUSH {mark(settings.push_enabled)}", callback_data="notify:push"), InlineKeyboardButton(text=f"E-mail {mark(settings.email_enabled)}", callback_data="notify:email")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:profile")],
+    ])
 
 
 def restaurant_keyboard(restaurants, action: str):
@@ -75,7 +85,15 @@ def purchases_keyboard(page: int, has_next: bool):
 
 
 def admin_menu():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Создать рассылку", callback_data="admin:create")], [InlineKeyboardButton(text="📨 Рассылки", callback_data="admin:list")], [InlineKeyboardButton(text="🏪 Рестораны и ссылки", callback_data="admin:restaurants")], [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="➕ Создать рассылку", callback_data="admin:create")], [InlineKeyboardButton(text="📨 Рассылки", callback_data="admin:list")], [InlineKeyboardButton(text="🏪 Рестораны и ссылки", callback_data="admin:restaurants")], [InlineKeyboardButton(text="📄 Политика и правила", callback_data="admin:legal")], [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:main")]])
+
+
+def admin_legal_links_keyboard():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔒 Политика обработки данных", callback_data="legal_link:privacy_policy_url")],
+        [InlineKeyboardButton(text="📜 Правила программы лояльности", callback_data="legal_link:loyalty_rules_url")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
+    ])
 
 
 def admin_restaurants_keyboard(items):

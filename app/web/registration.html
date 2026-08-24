@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Анкета участника — Рыба и Гады</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root { color-scheme: light dark; font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    * { box-sizing: border-box; }
+    body { margin:0; color:var(--tg-theme-text-color,#17212b); background:var(--tg-theme-bg-color,#fff); }
+    main { width:min(100%,620px); margin:0 auto; padding:28px 20px calc(32px + env(safe-area-inset-bottom)); }
+    .eyebrow { color:#147c78; font-size:13px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+    h1 { margin:8px 0 8px; font-size:28px; line-height:1.15; }
+    .lead { margin:0 0 26px; color:var(--tg-theme-hint-color,#66727e); line-height:1.45; }
+    .field { display:block; margin:0 0 18px; font-size:15px; font-weight:650; }
+    .field > span { color:#d14d57; }
+    input { width:100%; min-height:48px; margin-top:8px; padding:11px 13px; border:1px solid var(--tg-theme-section-separator-color,#ccd4dc); border-radius:12px; color:var(--tg-theme-text-color,#17212b); background:var(--tg-theme-secondary-bg-color,#f5f7f8); font:inherit; outline:none; }
+    input:focus { border-color:#147c78; box-shadow:0 0 0 3px rgba(20,124,120,.14); }
+    .optional { color:var(--tg-theme-hint-color,#66727e); font-size:12px; font-weight:500; }
+    fieldset { margin:0 0 20px; padding:0; border:0; }
+    legend { margin-bottom:10px; font-size:15px; font-weight:650; }
+    legend span { color:#d14d57; }
+    .choices { display:grid; gap:11px; }
+    .choice { display:flex; gap:10px; align-items:center; font-size:15px; line-height:1.35; }
+    .choice input { width:20px; min-height:20px; margin:0; accent-color:#147c78; }
+    .consent { display:grid; grid-template-columns:24px 1fr; gap:10px; align-items:start; margin:8px 0 22px; font-size:14px; line-height:1.5; }
+    .consent input { width:20px; min-height:20px; margin:2px 0 0; accent-color:#147c78; }
+    .required-star { color:#d14d57; font-weight:750; }
+    a { color:var(--tg-theme-link-color,#168acd); text-underline-offset:2px; }
+    a:not([href]) { color:inherit; text-decoration:none; }
+    button { width:100%; min-height:50px; border:0; border-radius:13px; color:var(--tg-theme-button-text-color,#fff); background:var(--tg-theme-button-color,#147c78); font-size:16px; font-weight:750; cursor:pointer; }
+    button:disabled { cursor:not-allowed; opacity:.5; }
+    .date-trigger { display:flex; align-items:center; justify-content:space-between; margin-top:8px; padding:0 14px; border:1px solid var(--tg-theme-section-separator-color,#ccd4dc); color:var(--tg-theme-text-color,#17212b); background:var(--tg-theme-secondary-bg-color,#f5f7f8); font-weight:550; text-align:left; }
+    .date-trigger .placeholder { color:var(--tg-theme-hint-color,#66727e); }
+    .date-trigger .calendar-icon { color:#147c78; font-size:20px; }
+    .date-modal[hidden] { display:none; }
+    .date-modal { position:fixed; inset:0; z-index:20; display:flex; align-items:flex-end; justify-content:center; padding-top:40px; background:rgba(8,18,27,.58); }
+    .date-sheet { width:min(100%,620px); max-height:calc(100vh - 40px); padding:18px 18px calc(20px + env(safe-area-inset-bottom)); border-radius:22px 22px 0 0; color:var(--tg-theme-text-color,#17212b); background:var(--tg-theme-bg-color,#fff); box-shadow:0 -12px 40px rgba(0,0,0,.2); }
+    .date-sheet-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+    .date-sheet h2 { margin:0; font-size:20px; }
+    .icon-button { width:40px; min-height:40px; border-radius:50%; color:var(--tg-theme-text-color,#17212b); background:var(--tg-theme-secondary-bg-color,#f0f2f4); font-size:21px; }
+    .date-controls { display:grid; grid-template-columns:40px 1fr 92px 40px; gap:8px; align-items:center; margin-bottom:14px; }
+    .date-controls select,.date-controls input { width:100%; min-height:42px; margin:0; padding:8px 10px; border:1px solid var(--tg-theme-section-separator-color,#ccd4dc); border-radius:11px; color:var(--tg-theme-text-color,#17212b); background:var(--tg-theme-secondary-bg-color,#f5f7f8); font:inherit; font-weight:650; outline:none; }
+    .date-controls input { text-align:center; }
+    .calendar-week,.calendar-grid { display:grid; grid-template-columns:repeat(7,1fr); gap:4px; }
+    .calendar-week { margin-bottom:5px; color:var(--tg-theme-hint-color,#66727e); font-size:12px; font-weight:700; text-align:center; }
+    .calendar-week span { padding:5px 0; }
+    .calendar-grid button { aspect-ratio:1; width:100%; min-height:0; padding:0; border-radius:50%; color:var(--tg-theme-text-color,#17212b); background:transparent; font-size:14px; font-weight:600; }
+    .calendar-grid button:hover,.calendar-grid button:focus { background:var(--tg-theme-secondary-bg-color,#edf2f4); }
+    .calendar-grid button.selected { color:var(--tg-theme-button-text-color,#fff); background:var(--tg-theme-button-color,#147c78); }
+    .calendar-grid button:disabled { color:var(--tg-theme-hint-color,#9aa3aa); background:transparent; opacity:.35; }
+    .calendar-grid .empty { aspect-ratio:1; }
+    .date-cancel { margin-top:14px; color:var(--tg-theme-text-color,#17212b); background:var(--tg-theme-secondary-bg-color,#edf2f4); }
+    body.modal-open { overflow:hidden; }
+    #status { min-height:22px; margin:12px 0 0; color:#d14d57; font-size:14px; line-height:1.4; }
+  </style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">Клуб привилегий</div>
+  <h1>Анкета участника</h1>
+  <p class="lead">Заполните данные, чтобы завершить регистрацию в программе лояльности.</p>
+  <form id="registration-form">
+    <label class="field">Имя<span>*</span><input name="first_name" maxlength="100" autocomplete="given-name" required></label>
+    <label class="field">Фамилия<span>*</span><input name="last_name" maxlength="100" autocomplete="family-name" required></label>
+    <label class="field">Отчество <small class="optional">необязательно</small><input name="middle_name" maxlength="100" autocomplete="additional-name"></label>
+    <div class="field">
+      Дата рождения<span>*</span>
+      <button id="birthday-button" class="date-trigger" type="button" aria-haspopup="dialog">
+        <span id="birthday-label" class="placeholder">Выберите дату</span><span class="calendar-icon">▦</span>
+      </button>
+    </div>
+    <fieldset>
+      <legend>Пол<span>*</span></legend>
+      <div class="choices">
+        <label class="choice"><input name="gender" type="radio" value="male" required>Мужской</label>
+        <label class="choice"><input name="gender" type="radio" value="female" required>Женский</label>
+      </div>
+    </fieldset>
+    <label class="field">E-mail <small class="optional">необязательно</small><input name="email" type="email" maxlength="254" autocomplete="email"></label>
+    <fieldset>
+      <legend>Я хочу получать информацию</legend>
+      <div class="choices">
+        <label class="choice"><input name="sms_enabled" type="checkbox" checked>СМС</label>
+        <label class="choice"><input name="push_enabled" type="checkbox" checked>PUSH</label>
+        <label class="choice"><input name="email_enabled" type="checkbox" checked>E-mail</label>
+      </div>
+    </fieldset>
+    <label class="consent">
+      <input name="consent" type="checkbox" required>
+      <span>Я соглашаюсь с <a id="privacy-link" target="_blank" rel="noopener noreferrer">обработкой персональных данных</a> и принимаю <a id="rules-link" target="_blank" rel="noopener noreferrer">Правила программы лояльности</a><span class="required-star">*</span></span>
+    </label>
+    <button id="submit" type="submit">Завершить регистрацию</button>
+    <p id="status" role="alert"></p>
+  </form>
+</main>
+<div id="date-modal" class="date-modal" hidden>
+  <section class="date-sheet" role="dialog" aria-modal="true" aria-labelledby="date-title">
+    <div class="date-sheet-header"><h2 id="date-title">Дата рождения</h2><button id="date-close" class="icon-button" type="button" aria-label="Закрыть">×</button></div>
+    <div class="date-controls">
+      <button id="month-prev" class="icon-button" type="button" aria-label="Предыдущий месяц">‹</button>
+      <select id="calendar-month" aria-label="Месяц"></select>
+      <input id="calendar-year" type="number" inputmode="numeric" min="1900" aria-label="Год">
+      <button id="month-next" class="icon-button" type="button" aria-label="Следующий месяц">›</button>
+    </div>
+    <div class="calendar-week" aria-hidden="true"><span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Вс</span></div>
+    <div id="calendar-grid" class="calendar-grid"></div>
+    <button id="date-cancel" class="date-cancel" type="button">Отмена</button>
+  </section>
+</div>
+<script>
+  const webApp = window.Telegram?.WebApp;
+  const form = document.getElementById('registration-form');
+  const submit = document.getElementById('submit');
+  const status = document.getElementById('status');
+  webApp?.ready();
+  webApp?.expand();
+
+  const monthNames = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
+  const dateModal = document.getElementById('date-modal');
+  const monthSelect = document.getElementById('calendar-month');
+  const yearInput = document.getElementById('calendar-year');
+  const calendarGrid = document.getElementById('calendar-grid');
+  const birthdayLabel = document.getElementById('birthday-label');
+  const today = new Date();
+  let selectedBirthday = null;
+  let viewMonth = today.getMonth();
+  let viewYear = today.getFullYear() - 25;
+
+  monthNames.forEach((name, index) => monthSelect.add(new Option(name, String(index))));
+
+  function birthdayValue() { return selectedBirthday; }
+  function closeCalendar() { dateModal.hidden = true; document.body.classList.remove('modal-open'); }
+  function openCalendar() {
+    dateModal.hidden = false;
+    document.body.classList.add('modal-open');
+    renderCalendar();
+    monthSelect.focus();
+  }
+  function shiftMonth(delta) {
+    viewMonth += delta;
+    if (viewMonth < 0) { viewMonth = 11; viewYear -= 1; }
+    if (viewMonth > 11) { viewMonth = 0; viewYear += 1; }
+    viewYear = Math.max(1900, Math.min(today.getFullYear(), viewYear));
+    renderCalendar();
+  }
+  function renderCalendar() {
+    monthSelect.value = String(viewMonth);
+    yearInput.value = String(viewYear);
+    yearInput.max = String(today.getFullYear());
+    calendarGrid.replaceChildren();
+    const firstWeekday = (new Date(Date.UTC(viewYear, viewMonth, 1)).getUTCDay() + 6) % 7;
+    const daysInMonth = new Date(Date.UTC(viewYear, viewMonth + 1, 0)).getUTCDate();
+    for (let index = 0; index < firstWeekday; index += 1) {
+      const empty = document.createElement('span'); empty.className = 'empty'; calendarGrid.appendChild(empty);
+    }
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const iso = `${String(viewYear).padStart(4,'0')}-${String(viewMonth + 1).padStart(2,'0')}-${String(day).padStart(2,'0')}`;
+      const candidate = new Date(`${iso}T00:00:00Z`);
+      const button = document.createElement('button');
+      button.type = 'button'; button.textContent = String(day); button.setAttribute('aria-label', `${day} ${monthNames[viewMonth]} ${viewYear}`);
+      button.disabled = candidate >= new Date(Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()));
+      if (selectedBirthday === iso) button.classList.add('selected');
+      button.addEventListener('click', () => {
+        selectedBirthday = iso;
+        birthdayLabel.textContent = `${String(day).padStart(2,'0')}.${String(viewMonth + 1).padStart(2,'0')}.${viewYear}`;
+        birthdayLabel.classList.remove('placeholder');
+        status.textContent = '';
+        closeCalendar();
+      });
+      calendarGrid.appendChild(button);
+    }
+  }
+
+  document.getElementById('birthday-button').addEventListener('click', openCalendar);
+  document.getElementById('date-close').addEventListener('click', closeCalendar);
+  document.getElementById('date-cancel').addEventListener('click', closeCalendar);
+  document.getElementById('month-prev').addEventListener('click', () => shiftMonth(-1));
+  document.getElementById('month-next').addEventListener('click', () => shiftMonth(1));
+  monthSelect.addEventListener('change', () => { viewMonth = Number(monthSelect.value); renderCalendar(); });
+  yearInput.addEventListener('change', () => { viewYear = Math.max(1900, Math.min(today.getFullYear(), Number(yearInput.value) || viewYear)); renderCalendar(); });
+  dateModal.addEventListener('click', event => { if (event.target === dateModal) closeCalendar(); });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape' && !dateModal.hidden) closeCalendar(); });
+
+  function openTelegramLink(event) {
+    if (webApp?.openLink) {
+      event.preventDefault();
+      webApp.openLink(event.currentTarget.href);
+    }
+  }
+
+  fetch('/registration/config', {cache:'no-store'})
+    .then(response => response.ok ? response.json() : Promise.reject())
+    .then(config => {
+      const privacy = document.getElementById('privacy-link');
+      const rules = document.getElementById('rules-link');
+      if (config.privacy_policy_url) {
+        privacy.href = config.privacy_policy_url;
+        privacy.addEventListener('click', openTelegramLink);
+      }
+      if (config.loyalty_rules_url) {
+        rules.href = config.loyalty_rules_url;
+        rules.addEventListener('click', openTelegramLink);
+      }
+    })
+    .catch(() => {});
+
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    status.textContent = '';
+    if (!form.reportValidity()) return;
+    const birthday = birthdayValue();
+    if (!birthday) {
+      status.textContent = 'Выберите дату рождения.';
+      openCalendar();
+      return;
+    }
+    if (!webApp?.sendData) {
+      status.textContent = 'Откройте анкету кнопкой внутри Telegram.';
+      return;
+    }
+    const data = new FormData(form);
+    webApp.sendData(JSON.stringify({
+      first_name: data.get('first_name').trim(),
+      last_name: data.get('last_name').trim(),
+      middle_name: data.get('middle_name').trim() || null,
+      birthday,
+      gender: data.get('gender'),
+      email: data.get('email').trim() || null,
+      sms_enabled: data.get('sms_enabled') === 'on',
+      push_enabled: data.get('push_enabled') === 'on',
+      email_enabled: data.get('email_enabled') === 'on',
+      consent: data.get('consent') === 'on'
+    }));
+    submit.disabled = true;
+    submit.textContent = 'Отправлено';
+    setTimeout(() => webApp.close(), 250);
+  });
+</script>
+</body>
+</html>

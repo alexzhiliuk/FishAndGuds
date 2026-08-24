@@ -1,4 +1,4 @@
-from app.models.entities import (LoyaltyAccount, LoyaltyTransaction, Mailing, MailingRun,
+from app.models.entities import (ApplicationSetting, LoyaltyAccount, LoyaltyTransaction, Mailing, MailingRun,
                                  NotificationSettings, Purchase, Restaurant, User)
 
-__all__ = ["User", "LoyaltyAccount", "LoyaltyTransaction", "Purchase", "Restaurant", "Mailing", "MailingRun", "NotificationSettings"]
+__all__ = ["ApplicationSetting", "User", "LoyaltyAccount", "LoyaltyTransaction", "Purchase", "Restaurant", "Mailing", "MailingRun", "NotificationSettings"]

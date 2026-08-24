@@ -10,6 +10,7 @@ from app.bot.handlers import user as user_handlers
 from app.bot.handlers import admin as admin_handlers
 from app.bot.keyboards.common import (
     action_keyboard,
+    admin_legal_links_keyboard,
     admin_menu,
     admin_restaurant_links_keyboard,
     admin_restaurants_keyboard,
@@ -84,7 +85,11 @@ def test_main_menu_welcome_text_is_shared_and_complete():
 
 
 def test_admin_menu_does_not_expose_users_button():
-    assert callback_data(admin_menu()) == ["admin:create", "admin:list", "admin:restaurants", "nav:main"]
+    assert callback_data(admin_menu()) == ["admin:create", "admin:list", "admin:restaurants", "admin:legal", "nav:main"]
+
+
+def test_admin_can_edit_registration_document_links():
+    assert callback_data(admin_legal_links_keyboard()) == ["legal_link:privacy_policy_url", "legal_link:loyalty_rules_url", "menu:admin"]
 
 
 def test_admin_can_select_restaurant_and_each_local_link():
@@ -210,10 +215,14 @@ def test_profile_and_notifications_have_back_navigation():
         promotions_enabled=True,
         news_enabled=False,
         holidays_enabled=True,
+        sms_enabled=True,
+        push_enabled=False,
+        email_enabled=True,
     )
 
     assert "profile:main" in callback_data(profile_keyboard())
     assert "nav:profile" in callback_data(notifications_keyboard(settings))
+    assert {"notify:sms", "notify:push", "notify:email"}.issubset(callback_data(notifications_keyboard(settings)))
     assert "purchases:back" in callback_data(purchases_keyboard(page=0, has_next=False))
 
 
@@ -269,6 +278,9 @@ async def test_notification_toggle_edits_current_message(monkeypatch):
         promotions_enabled=False,
         news_enabled=True,
         holidays_enabled=True,
+        sms_enabled=True,
+        push_enabled=True,
+        email_enabled=False,
     )
     service = SimpleNamespace(toggle=AsyncMock(return_value=settings))
     monkeypatch.setattr(user_handlers, "NotificationService", lambda session: service)

@@ -1,9 +1,11 @@
+from datetime import datetime
 from decimal import Decimal
+import json
 
 import httpx
 import pytest
 
-from app.integrations.iiko.dto import CustomerInfo, WalletBalance
+from app.integrations.iiko.dto import CustomerCreate, CustomerInfo, WalletBalance
 from app.integrations.iiko.real import RealIikoClient
 
 
@@ -43,6 +45,37 @@ async def test_customer_404_is_not_found():
         return httpx.Response(404, json={"correlationId": "missing"})
     client = RealIikoClient(base_url="https://example.test", api_key="key", app_id="app", client_secret="secret", transport=httpx.MockTransport(handler))
     assert await client.get_customer_info(organization_id="org", phone="+375291111111") is None
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_customer_lookup_by_card_number_uses_official_discriminator():
+    payloads = []
+    def handler(request):
+        if request.url.path == "/api/v2/access_token": return httpx.Response(200, json={"token": "token"})
+        payloads.append(json.loads(request.content))
+        return httpx.Response(404, json={"correlationId": "missing"})
+    client = RealIikoClient(base_url="https://example.test", api_key="key", app_id="app", client_secret="secret", transport=httpx.MockTransport(handler))
+    assert await client.get_customer_info(organization_id="org", card_number="98981234") is None
+    assert payloads == [{"organizationId": "org", "type": "cardNumber", "cardNumber": "98981234"}]
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_create_customer_sends_registration_fields_to_iiko():
+    payloads = []
+    def handler(request):
+        if request.url.path == "/api/v2/access_token": return httpx.Response(200, json={"token": "token"})
+        assert request.url.path == "/api/1/loyalty/iiko/customer/create_or_update"
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, json={"id": "customer-id"})
+    client = RealIikoClient(base_url="https://example.test", api_key="key", app_id="app", client_secret="secret", transport=httpx.MockTransport(handler))
+    customer_id = await client.create_or_update_customer(
+        organization_id="org",
+        customer=CustomerCreate(phone="+375291111111", name="Иван", surName="Иванов", birthday=datetime(2000, 1, 2), sex=1, consentStatus=1, shouldReceiveLoyaltyInfo=False, shouldReceivePromoActionsInfo=False),
+    )
+    assert customer_id == "customer-id"
+    assert payloads == [{"phone": "+375291111111", "name": "Иван", "surName": "Иванов", "birthday": "2000-01-02 00:00:00.000", "sex": 1, "consentStatus": 1, "shouldReceiveLoyaltyInfo": False, "shouldReceivePromoActionsInfo": False, "organizationId": "org"}]
     await client.close()
 
 

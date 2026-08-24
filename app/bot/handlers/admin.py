@@ -9,18 +9,22 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards.common import (admin_menu, admin_restaurant_links_keyboard, admin_restaurants_keyboard,
+from app.bot.keyboards.common import (admin_legal_links_keyboard, admin_menu, admin_restaurant_links_keyboard, admin_restaurants_keyboard,
                                       back_keyboard, mailing_actions, mailing_input_back, mailing_list_keyboard)
 from app.bot.media import resolve_mailing_photo
-from app.bot.states import MailingCreate, MailingEdit, MailingSchedule, RestaurantLinkEdit
+from app.bot.states import ApplicationLinkEdit, MailingCreate, MailingEdit, MailingSchedule, RestaurantLinkEdit
 from app.config import Settings
-from app.services import MailingService, RestaurantService
+from app.services import ApplicationSettingsService, MailingService, RestaurantService
 
 router = Router(name="admin")
 logger = logging.getLogger(__name__)
 RESTAURANT_LINK_FIELDS = {
     "delivery_url": "🛵 Доставка",
     "reviews_url": "⭐ Отзывы / Яндекс Карты",
+}
+APPLICATION_LINK_FIELDS = {
+    ApplicationSettingsService.PRIVACY_POLICY_URL: "🔒 Политика обработки персональных данных",
+    ApplicationSettingsService.LOYALTY_RULES_URL: "📜 Правила программы лояльности",
 }
 
 
@@ -64,6 +68,54 @@ async def open_admin_callback(callback: CallbackQuery, settings: Settings):
     if await deny(callback,settings): return
     await callback.message.answer("⚙️ Административное меню",reply_markup=admin_menu())
     await callback.answer()
+
+
+def legal_admin_text(values: dict[str, str | None]) -> str:
+    lines = ["📄 Документы регистрации", ""]
+    for key, label in APPLICATION_LINK_FIELDS.items():
+        lines.append(f"{label}:\n{values.get(key) or 'не задана'}\n")
+    lines.append("Ссылки открываются в анкете Mini App и хранятся в нашей БД.")
+    return "\n".join(lines)
+
+
+@router.callback_query(F.data == "admin:legal")
+async def admin_legal(callback: CallbackQuery, session: AsyncSession, state: FSMContext, settings: Settings):
+    if await deny(callback, settings): return
+    await callback.answer(); await state.clear()
+    values = await ApplicationSettingsService(session).registration_links()
+    await callback.message.edit_text(legal_admin_text(values), reply_markup=admin_legal_links_keyboard())
+
+
+@router.callback_query(F.data.startswith("legal_link:"))
+async def legal_link_start(callback: CallbackQuery, state: FSMContext, settings: Settings):
+    if await deny(callback, settings): return
+    key = callback.data.split(":", 1)[1]
+    if key not in APPLICATION_LINK_FIELDS:
+        await callback.answer("Неизвестная настройка", show_alert=True); return
+    await callback.answer(); await state.update_data(application_link_key=key); await state.set_state(ApplicationLinkEdit.value)
+    await callback.message.answer(
+        f"Отправьте HTTPS-ссылку для раздела «{APPLICATION_LINK_FIELDS[key]}».\n\n"
+        "Чтобы очистить поле, напишите «удалить».",
+        reply_markup=back_keyboard("admin:legal"),
+    )
+
+
+@router.message(ApplicationLinkEdit.value)
+async def legal_link_value(message: Message, state: FSMContext, session: AsyncSession):
+    raw_value = (message.text or "").strip()
+    if raw_value.lower() in {"удалить", "очистить", "нет", "-"}:
+        value = None
+    else:
+        parsed = urlparse(raw_value)
+        if len(raw_value) > 1000 or parsed.scheme != "https" or not parsed.netloc:
+            await message.answer("Некорректная ссылка. Отправьте полный HTTPS-адрес или напишите «удалить».", reply_markup=back_keyboard("admin:legal"))
+            return
+        value = raw_value
+    data = await state.get_data()
+    await ApplicationSettingsService(session).update_link(data["application_link_key"], value)
+    values = await ApplicationSettingsService(session).registration_links()
+    await state.clear()
+    await message.answer("Ссылка сохранена.\n\n" + legal_admin_text(values), reply_markup=admin_legal_links_keyboard())
 
 
 def restaurant_admin_text(item) -> str:

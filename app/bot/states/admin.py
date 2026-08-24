@@ -17,11 +17,9 @@ class RestaurantLinkEdit(StatesGroup):
     value = State()
 
 
+class ApplicationLinkEdit(StatesGroup):
+    value = State()
+
+
 class RegistrationForm(StatesGroup):
-    first_name = State()
-    last_name = State()
-    middle_name = State()
-    birthday = State()
-    email = State()
-    consent = State()
-    confirm = State()
+    mini_app = State()

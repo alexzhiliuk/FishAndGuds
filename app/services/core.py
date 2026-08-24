@@ -9,11 +9,26 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.iiko.client import IikoClient
 from app.integrations.iiko.exceptions import IikoError
 from app.models.entities import MailingStatus, MailingType, RunStatus
-from app.repositories import MailingRepository, PurchaseRepository, RestaurantRepository, UserRepository
+from app.repositories import ApplicationSettingRepository, MailingRepository, PurchaseRepository, RestaurantRepository, UserRepository
 from app.services.iiko import CardService, CustomerService, LoyaltySyncService, RestaurantSyncService
 from app.services.registration import RegistrationService
 
 logger = logging.getLogger(__name__)
+
+
+class ApplicationSettingsService:
+    PRIVACY_POLICY_URL = "privacy_policy_url"
+    LOYALTY_RULES_URL = "loyalty_rules_url"
+    LINK_KEYS = (PRIVACY_POLICY_URL, LOYALTY_RULES_URL)
+
+    def __init__(self, session: AsyncSession): self.session = session
+    async def registration_links(self):
+        values = await ApplicationSettingRepository(self.session).values(self.LINK_KEYS)
+        return {key: values.get(key) for key in self.LINK_KEYS}
+    async def update_link(self, key: str, value: str | None):
+        if key not in self.LINK_KEYS: raise ValueError("Неизвестная настройка")
+        item = await ApplicationSettingRepository(self.session).set(key, value)
+        await self.session.commit(); return item
 
 
 class LoyaltyService:
@@ -57,7 +72,7 @@ class RestaurantService:
 
 
 class NotificationService:
-    FIELDS = {"promotions": "promotions_enabled", "news": "news_enabled", "holidays": "holidays_enabled"}
+    FIELDS = {"promotions": "promotions_enabled", "news": "news_enabled", "holidays": "holidays_enabled", "sms": "sms_enabled", "push": "push_enabled", "email": "email_enabled"}
     def __init__(self, session: AsyncSession): self.session = session
     async def get_settings(self, telegram_id: int):
         user = await UserRepository(self.session).by_telegram_id(telegram_id)
@@ -68,21 +83,25 @@ class NotificationService:
 
 
 class SyncService:
-    def __init__(self, session: AsyncSession, iiko: IikoClient, *, default_organization_id: str, history_days: int = 365, page_size: int = 100):
+    def __init__(self, session: AsyncSession, iiko: IikoClient, *, default_organization_id: str, history_days: int = 365, page_size: int = 100, card_number_prefix: str = "9898", card_number_length: int = 8, card_generation_attempts: int = 10):
         self.session, self.iiko = session, iiko
         self.default_organization_id, self.history_days, self.page_size = default_organization_id, history_days, page_size
+        self.card_number_prefix, self.card_number_length = card_number_prefix, card_number_length
+        self.card_generation_attempts = card_generation_attempts
     async def sync_restaurants(self): return await RestaurantSyncService(self.session, self.iiko).sync_organizations()
     def _loyalty(self): return LoyaltySyncService(self.session, self.iiko, default_organization_id=self.default_organization_id, history_days=self.history_days, page_size=self.page_size)
+    def _cards(self): return CardService(self.session, self.iiko, self.default_organization_id, number_prefix=self.card_number_prefix, number_length=self.card_number_length, generation_attempts=self.card_generation_attempts)
+    def _registration(self): return RegistrationService(self.session, self.iiko, default_organization_id=self.default_organization_id, history_days=self.history_days, page_size=self.page_size, card_number_prefix=self.card_number_prefix, card_number_length=self.card_number_length, card_generation_attempts=self.card_generation_attempts)
     async def sync_user(self, user):
         if not user.loyalty_account.iiko_customer_id:
-            return int(await RegistrationService(self.session, self.iiko, default_organization_id=self.default_organization_id, history_days=self.history_days, page_size=self.page_size).sync_pending_user(user))
+            return int(await self._registration().sync_pending_user(user))
         customer = await self.iiko.get_customer_info(organization_id=self.default_organization_id, customer_id=user.loyalty_account.iiko_customer_id)
         if customer:
             await CustomerService(self.session, self.iiko, self.default_organization_id).sync_customer(user, customer)
-            await CardService(self.session, self.iiko, self.default_organization_id).ensure_card(user, customer)
+            await self._cards().ensure_card(user, customer)
         return await self._loyalty().sync_transactions_by_revision(user)
     async def retry_pending(self):
-        service = RegistrationService(self.session, self.iiko, default_organization_id=self.default_organization_id, history_days=self.history_days, page_size=self.page_size)
+        service = self._registration()
         return sum([int(await service.sync_pending_user(user)) for user in await UserRepository(self.session).pending_iiko()])
     async def sync_all(self):
         total = 0
@@ -124,7 +143,7 @@ class MailingService:
         repo = MailingRepository(self.session); item = await repo.get(item_id)
         if not item: raise ValueError("Рассылка не найдена")
         excluded = set(excluded_telegram_ids)
-        users = [user for user in await UserRepository(self.session).active() if user.telegram_id not in excluded]
+        users = [user for user in await UserRepository(self.session).active() if user.telegram_id not in excluded and (user.notification_settings is None or user.notification_settings.push_enabled)]
         now = datetime.now(timezone.utc)
         item.status = MailingStatus.sending
         run = await repo.add_run(mailing_id=item.id, total_count=len(users), sent_count=0, failed_count=0, status=RunStatus.sending, started_at=now)

@@ -14,7 +14,23 @@ async def test_healthcheck_without_bot_does_not_expose_webhook():
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
     business_paths = {route.path for route in app.routes if not route.path.startswith("/docs") and route.path != "/openapi.json" and route.path != "/redoc"}
-    assert business_paths == {"/healthz"}
+    assert business_paths == {"/healthz", "/registration"}
+
+
+@pytest.mark.asyncio
+async def test_registration_page_is_served():
+    app = create_api()
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/registration")
+    assert response.status_code == 200
+    assert "Анкета участника" in response.text
+    assert 'type="date"' not in response.text
+    assert 'aria-haspopup="dialog"' in response.text
+    assert 'aria-label="Месяц"' in response.text
+    assert 'aria-label="Год"' in response.text
+    assert '<button id="submit" type="submit">' in response.text
+    assert '<span class="required-star">*</span>' in response.text
 
 
 class DispatcherStub:

@@ -5,13 +5,34 @@ import pytest
 from sqlalchemy import func, select
 
 from app.integrations.iiko.dto import LoyaltyTransaction as IikoLoyaltyTransaction
-from app.models import LoyaltyTransaction, Purchase, User
+from app.models import LoyaltyTransaction, NotificationSettings, Purchase, User
 from app.repositories import MailingRepository
-from app.services import LoyaltyService, MailingService, RegistrationService, SyncService
+from app.services import ApplicationSettingsService, LoyaltyService, MailingService, RegistrationService, RegistrationSubmission, SyncService
 from app.services.phone import PhoneNormalizationService
 from tests.iiko_double import IikoTestDouble
 
 ORG = "926c9ebc-27a9-4297-a970-a692f1af7f37"
+
+
+def test_mini_app_registration_submission_validation():
+    form = RegistrationSubmission.model_validate({"first_name": " Иван ", "last_name": " Иванов ", "middle_name": "", "birthday": "2000-01-02", "gender": "male", "email": "ivan@example.com", "sms_enabled": True, "push_enabled": False, "email_enabled": True, "consent": True})
+    assert form.first_name == "Иван"
+    assert form.middle_name is None
+    assert form.gender == "male"
+    assert form.push_enabled is False
+    with pytest.raises(ValueError):
+        RegistrationSubmission.model_validate({"first_name": "Иван", "last_name": "Иванов", "birthday": "2000-01-02", "gender": "female", "consent": False})
+
+
+@pytest.mark.asyncio
+async def test_registration_document_links_are_stored_in_database(session):
+    service = ApplicationSettingsService(session)
+    await service.update_link(service.PRIVACY_POLICY_URL, "https://example.com/privacy")
+    await service.update_link(service.LOYALTY_RULES_URL, "https://example.com/rules")
+    assert await service.registration_links() == {
+        service.PRIVACY_POLICY_URL: "https://example.com/privacy",
+        service.LOYALTY_RULES_URL: "https://example.com/rules",
+    }
 
 
 def registration(session, client):
@@ -35,16 +56,35 @@ async def test_missing_customer_requires_form(session):
 
 
 @pytest.mark.asyncio
-async def test_new_customer_is_kept_local_while_iiko_creation_is_disabled(session):
+async def test_new_customer_is_created_in_iiko_with_matching_unique_card(session):
     phone = "+375291111111"; client = IikoTestDouble(default_organization_id=ORG, not_found_phones={phone})
-    user = await registration(session, client).complete(telegram_id=42, phone=phone, first_name="Иван", last_name="Иванов", middle_name=None, birthday=date(2000, 1, 2), email=None, consent=True)
-    assert user.loyalty_account.iiko_customer_id is None
-    assert user.loyalty_account.iiko_sync_status.value == "pending"
+    user = await registration(session, client).complete(telegram_id=42, phone=phone, first_name="Иван", last_name="Иванов", middle_name=None, birthday=date(2000, 1, 2), gender="male", email=None, sms_enabled=False, push_enabled=True, email_enabled=False, consent=True)
+    assert user.gender == "male"
+    assert user.notification_settings.sms_enabled is False
+    assert user.notification_settings.push_enabled is True
+    assert user.notification_settings.email_enabled is False
+    assert user.loyalty_account.iiko_customer_id
+    assert user.loyalty_account.iiko_sync_status.value == "synced"
     assert user.loyalty_account.last_known_balance == Decimal("0")
-    assert client.add_card_calls == 0
-    await registration(session, client).sync_pending_user(user)
-    assert user.loyalty_account.iiko_customer_id is None
-    assert client.add_card_calls == 0
+    assert user.loyalty_account.card_number.startswith("9898")
+    assert len(user.loyalty_account.card_number) == 8
+    assert user.loyalty_account.card_track == user.loyalty_account.card_number
+    assert client.create_customer_calls == 1
+    assert client.add_card_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_card_generation_skips_number_that_already_exists_in_iiko(session, monkeypatch):
+    phone = "+375291111111"; client = IikoTestDouble(default_organization_id=ORG, not_found_phones={phone})
+    owner = client.seed_customer("+375299999999")
+    owner.cards = [owner.cards[0].model_copy(update={"number": "98980001", "track": "98980001"})]
+    suffixes = iter((1, 2))
+    monkeypatch.setattr("app.services.iiko.randbelow", lambda _: next(suffixes))
+
+    user = await registration(session, client).complete(telegram_id=42, phone=phone, first_name="Иван", last_name="Иванов", middle_name=None, birthday=date(2000, 1, 2), gender="male", email=None, consent=True)
+
+    assert user.loyalty_account.card_number == "98980002"
+    assert client.add_card_calls == 1
 
 
 @pytest.mark.asyncio
@@ -191,6 +231,20 @@ async def test_mailing_counts_failures_and_excludes_admin(session):
         if uid == 3: raise RuntimeError("blocked")
     run = await service.send(item.id, sender, excluded_telegram_ids=(1,))
     assert (run.total_count, run.sent_count, run.failed_count) == (2, 1, 1)
+
+
+@pytest.mark.asyncio
+async def test_telegram_mailing_respects_push_preference(session):
+    session.add_all([
+        User(telegram_id=10, first_name="Push", phone="+10000000010", notification_settings=NotificationSettings(push_enabled=True)),
+        User(telegram_id=11, first_name="No push", phone="+10000000011", notification_settings=NotificationSettings(push_enabled=False)),
+    ]); await session.commit()
+    item = await MailingService(session).create("Promo", "Hello")
+    recipients = []
+    async def sender(uid, text, image): recipients.append(uid)
+    run = await MailingService(session).send(item.id, sender)
+    assert recipients == [10]
+    assert run.total_count == 1
 
 
 @pytest.mark.asyncio

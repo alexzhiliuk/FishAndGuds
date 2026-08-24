@@ -1,4 +1,4 @@
-from app.repositories.core import (LoyaltyAccountRepository, LoyaltyTransactionRepository, MailingRepository,
+from app.repositories.core import (ApplicationSettingRepository, LoyaltyAccountRepository, LoyaltyTransactionRepository, MailingRepository,
                                    PurchaseRepository, RestaurantRepository, UserRepository)
 
-__all__ = ["UserRepository", "LoyaltyAccountRepository", "LoyaltyTransactionRepository", "PurchaseRepository", "RestaurantRepository", "MailingRepository"]
+__all__ = ["ApplicationSettingRepository", "UserRepository", "LoyaltyAccountRepository", "LoyaltyTransactionRepository", "PurchaseRepository", "RestaurantRepository", "MailingRepository"]
