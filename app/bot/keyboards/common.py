@@ -27,7 +27,10 @@ def registration_web_app_keyboard(url: str):
 
 def main_menu(is_admin: bool = False):
     rows = [
-        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu:profile")],
+        [
+            InlineKeyboardButton(text="▣ QR", callback_data="menu:qr"),
+            InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu:profile"),
+        ],
         [
             InlineKeyboardButton(text="🍽 Забронировать", callback_data="menu:booking"),
             InlineKeyboardButton(

@@ -76,6 +76,7 @@ def test_main_menu_is_inline_and_uses_callback_navigation():
 
     assert isinstance(markup, InlineKeyboardMarkup)
     assert callback_data(markup) == [
+        "menu:qr",
         "menu:profile",
         "menu:booking",
         "menu:delivery",
@@ -83,6 +84,45 @@ def test_main_menu_is_inline_and_uses_callback_navigation():
         "menu:contact",
         "menu:admin",
     ]
+    assert [button.callback_data for button in markup.inline_keyboard[0]] == ["menu:qr", "menu:profile"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("source", "back_target"), [("menu:qr", "nav:main"), ("profile:qr", "nav:profile")])
+async def test_qr_returns_to_the_screen_it_was_opened_from(monkeypatch, source, back_target):
+    class FakeLoyaltyService:
+        init_args = None
+        def __init__(self, *args): FakeLoyaltyService.init_args = args
+        async def get_profile(self, telegram_id):
+            return {"card": SimpleNamespace(qr_payload="98981234", card_number="98981234")}
+        @staticmethod
+        def generate_qr(payload): return b"png"
+
+    monkeypatch.setattr(user_handlers, "LoyaltyService", FakeLoyaltyService)
+    callback = SimpleNamespace(
+        data=source,
+        from_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(answer_photo=AsyncMock()),
+        answer=AsyncMock(),
+    )
+
+    session, iiko = object(), object()
+    settings = SimpleNamespace(iiko_default_organization_id="organization-id")
+
+    await user_handlers.qr(callback, session=session, settings=settings, iiko=iiko)
+
+    markup = callback.message.answer_photo.await_args.kwargs["reply_markup"]
+    assert callback_data(markup) == [back_target]
+    assert FakeLoyaltyService.init_args == (session, iiko, "organization-id")
+
+
+def test_restaurant_admin_text_does_not_expose_internal_system_names():
+    item = SimpleNamespace(name="Рыба и гады", address="Минск", website_url=None, delivery_url=None, reviews_url=None)
+
+    text = admin_handlers.restaurant_admin_text(item)
+
+    assert "iiko" not in text.lower()
+    assert "бд" not in text.lower()
 
 
 def test_main_menu_welcome_text_is_shared_and_complete():
