@@ -116,7 +116,7 @@ async def register(message: Message, state: FSMContext, session: AsyncSession, i
         await state.clear(); await state.update_data(phone=message.contact.phone_number, iiko_available=result.iiko_available)
         await state.set_state(RegistrationForm.mini_app)
         await message.answer(
-            "Гость с таким номером не найден в iiko. Заполните короткую анкету:",
+            "Карта не найдена. Заполните короткую анкету:",
             reply_markup=registration_web_app_keyboard(settings.registration_web_app_url),
         )
     except Exception:
@@ -147,7 +147,7 @@ async def registration_complete(message: Message, state: FSMContext, session: As
     )
     pending = user.loyalty_account.iiko_sync_status.value != "synced"
     await state.clear()
-    await message.answer("Регистрация завершена." + (" Данные iiko синхронизируются автоматически." if pending else " Карта подключена."), reply_markup=ReplyKeyboardRemove())
+    await message.answer("Регистрация завершена." + (" Карта создаётся автоматически." if pending else " Карта подключена."), reply_markup=ReplyKeyboardRemove())
     await send_main_menu(message, message.from_user.id, settings)
 
 
@@ -188,13 +188,14 @@ async def profile_to_main(callback: CallbackQuery, settings: Settings):
     await callback.answer()
 
 
-@router.callback_query(F.data == "profile:qr")
-async def qr(callback: CallbackQuery, session: AsyncSession):
-    data=await LoyaltyService(session).get_profile(callback.from_user.id)
+@router.callback_query(F.data.in_({"profile:qr", "menu:qr"}))
+async def qr(callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient):
+    data=await LoyaltyService(session, iiko, settings.iiko_default_organization_id).get_profile(callback.from_user.id)
     if not data: await callback.answer("Карта не найдена", show_alert=True); return
     if not data["card"].qr_payload: await callback.answer("Карта ещё синхронизируется", show_alert=True); return
     content=LoyaltyService.generate_qr(data["card"].qr_payload)
-    await callback.message.answer_photo(BufferedInputFile(content, filename="loyalty-qr.png"), caption=f"Карта №{data['card'].card_number}", reply_markup=back_keyboard("nav:profile"))
+    back_target = "nav:main" if callback.data == "menu:qr" else "nav:profile"
+    await callback.message.answer_photo(BufferedInputFile(content, filename="loyalty-qr.png"), caption=f"Карта №{data['card'].card_number}", reply_markup=back_keyboard(back_target))
     await callback.answer()
 
 

@@ -119,10 +119,10 @@ async def legal_link_value(message: Message, state: FSMContext, session: AsyncSe
 
 
 def restaurant_admin_text(item) -> str:
-    lines = [f"🏪 {item.name}", item.address or "Адрес не указан", "", f"🌐 Сайт из iiko: {item.website_url or 'не получен'}", "", "Локальные ссылки:"]
+    lines = [f"🏪 {item.name}", item.address or "Адрес не указан", "", f"🌐 Сайт ресторана: {item.website_url or 'не указан'}", "", "Дополнительные ссылки:"]
     for field, label in RESTAURANT_LINK_FIELDS.items():
         lines.append(f"{label}: {getattr(item, field) or 'не задана'}")
-    lines.append("\nЭти ссылки хранятся в нашей БД и не перезаписываются из iiko.")
+    lines.append("\nДополнительные ссылки настраиваются отдельно для каждого ресторана.")
     return "\n".join(lines)
 
 
