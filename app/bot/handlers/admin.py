@@ -4,7 +4,6 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards.common import (admin_legal_links_keyboard, admin_menu, admin_restaurant_links_keyboard, admin_restaurants_keyboard,
                                       back_keyboard, mailing_actions, mailing_input_back, mailing_list_keyboard)
 from app.bot.media import resolve_mailing_photo
+from app.bot.navigation import clear_inline_keyboard
 from app.bot.states import ApplicationLinkEdit, MailingCreate, MailingEdit, MailingSchedule, RestaurantLinkEdit
 from app.config import Settings
 from app.services import ApplicationSettingsService, MailingService, RestaurantService
@@ -48,15 +48,6 @@ async def send_mailing_preview(message: Message, item, settings: Settings, list_
         await message.answer(item.text, reply_markup=reply_markup)
 
 
-async def safe_delete_message(message: Message) -> None:
-    try:
-        await message.delete()
-    except TelegramBadRequest as exc:
-        if "message to delete not found" not in str(exc).lower():
-            raise
-        logger.info("Telegram message was already deleted chat_id=%s message_id=%s", message.chat.id, message.message_id)
-
-
 @router.message(F.text == "⚙️ Админ-панель")
 async def open_admin(message: Message, settings: Settings):
     if await deny(message,settings): return
@@ -66,6 +57,15 @@ async def open_admin(message: Message, settings: Settings):
 @router.callback_query(F.data == "menu:admin")
 async def open_admin_callback(callback: CallbackQuery, settings: Settings):
     if await deny(callback,settings): return
+    await clear_inline_keyboard(callback.message)
+    await callback.message.answer("⚙️ Административное меню",reply_markup=admin_menu())
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:back")
+async def admin_back(callback: CallbackQuery, settings: Settings):
+    if await deny(callback,settings): return
+    await clear_inline_keyboard(callback.message)
     await callback.message.answer("⚙️ Административное меню",reply_markup=admin_menu())
     await callback.answer()
 
@@ -83,7 +83,8 @@ async def admin_legal(callback: CallbackQuery, session: AsyncSession, state: FSM
     if await deny(callback, settings): return
     await callback.answer(); await state.clear()
     values = await ApplicationSettingsService(session).registration_links()
-    await callback.message.edit_text(legal_admin_text(values), reply_markup=admin_legal_links_keyboard())
+    await clear_inline_keyboard(callback.message)
+    await callback.message.answer(legal_admin_text(values), reply_markup=admin_legal_links_keyboard())
 
 
 @router.callback_query(F.data.startswith("legal_link:"))
@@ -93,6 +94,7 @@ async def legal_link_start(callback: CallbackQuery, state: FSMContext, settings:
     if key not in APPLICATION_LINK_FIELDS:
         await callback.answer("Неизвестная настройка", show_alert=True); return
     await callback.answer(); await state.update_data(application_link_key=key); await state.set_state(ApplicationLinkEdit.value)
+    await clear_inline_keyboard(callback.message)
     await callback.message.answer(
         f"Отправьте HTTPS-ссылку для раздела «{APPLICATION_LINK_FIELDS[key]}».\n\n"
         "Чтобы очистить поле, напишите «удалить».",
@@ -133,7 +135,8 @@ async def admin_restaurants(callback: CallbackQuery, session: AsyncSession, stat
     await state.clear()
     items = await RestaurantService(session).list_all()
     text = "🏪 Выберите ресторан:" if items else "Ресторанов в базе пока нет."
-    await callback.message.edit_text(text, reply_markup=admin_restaurants_keyboard(items))
+    await clear_inline_keyboard(callback.message)
+    await callback.message.answer(text, reply_markup=admin_restaurants_keyboard(items))
 
 
 @router.callback_query(F.data.startswith("admin:restaurant:"))
@@ -143,9 +146,10 @@ async def admin_restaurant(callback: CallbackQuery, session: AsyncSession, state
     await state.clear()
     item_id = int(callback.data.rsplit(":", 1)[1])
     item = await RestaurantService(session).get(item_id)
+    await clear_inline_keyboard(callback.message)
     if item is None:
-        await callback.message.edit_text("Ресторан не найден.", reply_markup=back_keyboard("admin:restaurants")); return
-    await callback.message.edit_text(restaurant_admin_text(item), reply_markup=admin_restaurant_links_keyboard(item.id))
+        await callback.message.answer("Ресторан не найден.", reply_markup=back_keyboard("admin:restaurants")); return
+    await callback.message.answer(restaurant_admin_text(item), reply_markup=admin_restaurant_links_keyboard(item.id))
 
 
 @router.callback_query(F.data.startswith("restaurant_link:"))
@@ -157,6 +161,7 @@ async def restaurant_link_start(callback: CallbackQuery, state: FSMContext, sett
     await callback.answer()
     await state.update_data(restaurant_id=int(item_id), restaurant_link_field=field)
     await state.set_state(RestaurantLinkEdit.value)
+    await clear_inline_keyboard(callback.message)
     await callback.message.answer(
         f"Отправьте ссылку для раздела «{RESTAURANT_LINK_FIELDS[field]}».\n\n"
         "Разрешены ссылки http:// и https://. Чтобы очистить поле, напишите «удалить».",
@@ -188,14 +193,15 @@ async def restaurant_link_value(message: Message, state: FSMContext, session: As
 @router.callback_query(F.data == "admin:create")
 async def create_start(callback: CallbackQuery,state:FSMContext,settings:Settings):
     if await deny(callback,settings): return
-    await state.set_state(MailingCreate.name); await callback.message.answer("Введите название рассылки:", reply_markup=mailing_input_back("mail:create_back")); await callback.answer()
+    await state.set_state(MailingCreate.name); await clear_inline_keyboard(callback.message); await callback.message.answer("Введите название рассылки:", reply_markup=mailing_input_back("mail:create_back")); await callback.answer()
 
 
 @router.callback_query(F.data == "mail:create_back")
 async def create_back(callback: CallbackQuery, state: FSMContext, settings: Settings):
     if await deny(callback, settings): return
     await state.clear()
-    await callback.message.edit_text("⚙️ Административное меню", reply_markup=admin_menu())
+    await clear_inline_keyboard(callback.message)
+    await callback.message.answer("⚙️ Административное меню", reply_markup=admin_menu())
     await callback.answer()
 
 
@@ -225,16 +231,7 @@ async def show_mailing_list(message: Message, session: AsyncSession, page: int):
         items, has_next = await MailingService(session).page(page)
     text = "📨 Выберите рассылку по названию:" if items else "Рассылок пока нет."
     markup = mailing_list_keyboard(items, page, has_next)
-    if getattr(message, "photo", None):
-        await message.answer(text, reply_markup=markup)
-        await safe_delete_message(message)
-    else:
-        try:
-            await message.edit_text(text, reply_markup=markup)
-        except TelegramBadRequest as exc:
-            if "message to edit not found" not in str(exc).lower():
-                raise
-            await message.answer(text, reply_markup=markup)
+    await message.answer(text, reply_markup=markup)
 
 
 @router.callback_query(F.data == "admin:list")
@@ -242,6 +239,16 @@ async def show_mailing_list(message: Message, session: AsyncSession, page: int):
 async def list_mailings(callback:CallbackQuery,session:AsyncSession,settings:Settings):
     if await deny(callback,settings): return
     page = int(callback.data.rsplit(":", 1)[1]) if callback.data.count(":") == 2 else 0
+    await clear_inline_keyboard(callback.message)
+    await show_mailing_list(callback.message, session, page)
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("admin:list_back:"))
+async def mailing_list_back(callback: CallbackQuery, session: AsyncSession, settings: Settings):
+    if await deny(callback, settings): return
+    page = int(callback.data.rsplit(":", 1)[1])
+    await clear_inline_keyboard(callback.message)
     await show_mailing_list(callback.message, session, page)
     await callback.answer()
 
@@ -253,8 +260,8 @@ async def open_mailing(callback: CallbackQuery, session: AsyncSession, settings:
     item = await MailingService(session).get(int(item_id))
     if not item:
         await callback.answer("Рассылка не найдена", show_alert=True); return
+    await clear_inline_keyboard(callback.message)
     await send_mailing_preview(callback.message, item, settings, int(page))
-    await safe_delete_message(callback.message)
     await callback.answer()
 
 
@@ -264,7 +271,7 @@ async def edit_start(callback:CallbackQuery,state:FSMContext,settings:Settings):
     _, action, item_id, *page_parts = callback.data.split(":"); field=action.removeprefix("edit_")
     list_page = int(page_parts[0]) if page_parts else 0
     states={"name":MailingEdit.name,"text":MailingEdit.text,"image":MailingEdit.image}
-    await state.update_data(mailing_id=int(item_id),field=field,list_page=list_page); await state.set_state(states[field]); await callback.message.answer("Отправьте новое значение:" if field != "image" else "Отправьте новое изображение:", reply_markup=mailing_input_back(f"mail:input_back:{item_id}:{list_page}")); await callback.answer()
+    await state.update_data(mailing_id=int(item_id),field=field,list_page=list_page); await state.set_state(states[field]); await clear_inline_keyboard(callback.message); await callback.message.answer("Отправьте новое значение:" if field != "image" else "Отправьте новое изображение:", reply_markup=mailing_input_back(f"mail:input_back:{item_id}:{list_page}")); await callback.answer()
 
 
 @router.callback_query(F.data.startswith("mail:input_back:"))
@@ -275,8 +282,8 @@ async def mailing_input_cancel(callback: CallbackQuery, state: FSMContext, sessi
     item = await MailingService(session).get(int(item_id))
     if not item:
         await callback.answer("Рассылка не найдена", show_alert=True); return
+    await clear_inline_keyboard(callback.message)
     await send_mailing_preview(callback.message, item, settings, int(page))
-    await safe_delete_message(callback.message)
     await callback.answer()
 
 
@@ -300,7 +307,7 @@ async def telegram_sender(bot:Bot,settings:Settings,telegram_id:int,text:str,ima
 @router.callback_query(F.data.startswith("mail:send:"))
 async def send_now(callback:CallbackQuery,session:AsyncSession,bot:Bot,settings:Settings):
     if await deny(callback,settings): return
-    item_id=int(callback.data.rsplit(":",1)[1]); await callback.answer("Рассылка запущена")
+    item_id=int(callback.data.rsplit(":",1)[1]); await callback.answer("Рассылка запущена"); await clear_inline_keyboard(callback.message)
     run=await MailingService(session).send(
         item_id,
         lambda uid,text,image:telegram_sender(bot,settings,uid,text,image),
@@ -315,6 +322,7 @@ async def schedule_start(callback:CallbackQuery,state:FSMContext,settings:Settin
     _, _, item_id, *page_parts = callback.data.split(":")
     list_page = int(page_parts[0]) if page_parts else 0
     await state.update_data(mailing_id=int(item_id), list_page=list_page); await state.set_state(MailingSchedule.when)
+    await clear_inline_keyboard(callback.message)
     await callback.message.answer("Введите дату и время в формате ДД.ММ.ГГГГ ЧЧ:ММ:", reply_markup=mailing_input_back(f"mail:input_back:{item_id}:{list_page}")); await callback.answer()
 
 
@@ -332,7 +340,7 @@ async def schedule_value(message:Message,state:FSMContext,session:AsyncSession,s
 @router.callback_query(F.data.startswith("mail:cancel:"))
 async def cancel(callback:CallbackQuery,session:AsyncSession,settings:Settings):
     if await deny(callback,settings): return
-    await MailingService(session).cancel(int(callback.data.rsplit(":",1)[1])); await callback.message.answer("Рассылка отменена."); await callback.answer()
+    await MailingService(session).cancel(int(callback.data.rsplit(":",1)[1])); await clear_inline_keyboard(callback.message); await callback.message.answer("Рассылка отменена."); await callback.answer()
 
 
 @router.callback_query(F.data.startswith("mail:delete:"))
@@ -341,6 +349,7 @@ async def delete(callback:CallbackQuery,session:AsyncSession,settings:Settings):
     _, _, item_id, *page_parts = callback.data.split(":")
     list_page = int(page_parts[0]) if page_parts else 0
     await callback.answer("Удаляю…")
+    await clear_inline_keyboard(callback.message)
     try:
         await MailingService(session).delete(int(item_id))
     except ValueError as exc:
