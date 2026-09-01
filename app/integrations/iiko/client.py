@@ -1,7 +1,12 @@
 from abc import ABC, abstractmethod
 from datetime import datetime
 
-from app.integrations.iiko.dto import CustomerCreate, CustomerInfo, IikoOrganization, LoyaltyTransaction
+from app.integrations.iiko.dto import (
+    CustomerCreate,
+    CustomerInfo,
+    IikoOrganization,
+    LoyaltyTransaction,
+)
 
 
 class IikoClient(ABC):
@@ -10,12 +15,45 @@ class IikoClient(ABC):
     @abstractmethod
     async def get_organizations(self) -> list[IikoOrganization]: ...
     @abstractmethod
-    async def get_customer_info(self, *, organization_id: str, phone: str | None = None, customer_id: str | None = None, card_number: str | None = None) -> CustomerInfo | None: ...
+    async def get_customer_info(
+        self,
+        *,
+        organization_id: str,
+        phone: str | None = None,
+        customer_id: str | None = None,
+        card_number: str | None = None,
+    ) -> CustomerInfo | None: ...
     @abstractmethod
-    async def create_or_update_customer(self, *, organization_id: str, customer: CustomerCreate) -> str: ...
+    async def create_or_update_customer(
+        self, *, organization_id: str, customer: CustomerCreate
+    ) -> str: ...
     @abstractmethod
-    async def add_card(self, *, customer_id: str, card_track: str, card_number: str, organization_id: str) -> None: ...
+    async def add_card(
+        self,
+        *,
+        customer_id: str,
+        card_track: str,
+        card_number: str,
+        organization_id: str,
+    ) -> None: ...
     @abstractmethod
-    async def get_transactions_by_date(self, *, customer_id: str, date_from: datetime, date_to: datetime, page_number: int, page_size: int, organization_id: str) -> list[LoyaltyTransaction]: ...
+    async def get_transactions_by_date(
+        self,
+        *,
+        customer_id: str,
+        date_from: datetime,
+        date_to: datetime,
+        page_number: int,
+        page_size: int,
+        organization_id: str,
+    ) -> list[LoyaltyTransaction]: ...
     @abstractmethod
-    async def get_transactions_by_revision(self, *, customer_id: str, revision: int, last_transaction_id: str | None, page_size: int, organization_id: str) -> tuple[list[LoyaltyTransaction], int, str | None]: ...
+    async def get_transactions_by_revision(
+        self,
+        *,
+        customer_id: str,
+        revision: int,
+        last_transaction_id: str | None,
+        page_size: int,
+        organization_id: str,
+    ) -> tuple[list[LoyaltyTransaction], int, str | None]: ...

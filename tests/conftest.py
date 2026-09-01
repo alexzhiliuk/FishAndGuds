@@ -5,9 +5,10 @@ from app.db.base import Base
 
 @pytest_asyncio.fixture
 async def session():
-    engine=create_async_engine("sqlite+aiosqlite:///:memory:")
-    async with engine.begin() as conn: await conn.run_sync(Base.metadata.create_all)
-    factory=async_sessionmaker(engine,expire_on_commit=False)
-    async with factory() as value: yield value
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with factory() as value:
+        yield value
     await engine.dispose()
-

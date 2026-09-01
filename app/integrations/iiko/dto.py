@@ -24,11 +24,28 @@ class IikoOrganization(IikoDTO):
     def extract_website(cls, value):
         if not isinstance(value, dict) or value.get("website_url"):
             return value
-        additional = value.get("additionalInfo") if isinstance(value.get("additionalInfo"), dict) else {}
-        website = next((candidate for candidate in (
-            value.get("websiteUrl"), value.get("website"), value.get("webSite"), value.get("siteUrl"),
-            additional.get("websiteUrl"), additional.get("website"), additional.get("webSite"), additional.get("siteUrl"),
-        ) if candidate), None)
+        additional = (
+            value.get("additionalInfo")
+            if isinstance(value.get("additionalInfo"), dict)
+            else {}
+        )
+        website = next(
+            (
+                candidate
+                for candidate in (
+                    value.get("websiteUrl"),
+                    value.get("website"),
+                    value.get("webSite"),
+                    value.get("siteUrl"),
+                    additional.get("websiteUrl"),
+                    additional.get("website"),
+                    additional.get("webSite"),
+                    additional.get("siteUrl"),
+                )
+                if candidate
+            ),
+            None,
+        )
         return {**value, "website_url": website} if website else value
 
 
@@ -62,7 +79,9 @@ class CustomerInfo(IikoDTO):
     email: str | None = None
     cards: list[CustomerCard] = Field(default_factory=list)
     categories: list[CustomerCategory] = Field(default_factory=list)
-    wallet_balances: list[WalletBalance] = Field(default_factory=list, alias="walletBalances")
+    wallet_balances: list[WalletBalance] = Field(
+        default_factory=list, alias="walletBalances"
+    )
     when_registered: datetime | None = Field(None, alias="whenRegistered")
 
     def bonus_balance(self) -> Decimal:
@@ -82,7 +101,9 @@ class CustomerCreate(IikoDTO):
     sex: int = 0
     consent_status: int = Field(1, alias="consentStatus")
     should_receive_loyalty_info: bool = Field(True, alias="shouldReceiveLoyaltyInfo")
-    should_receive_promo_actions_info: bool = Field(True, alias="shouldReceivePromoActionsInfo")
+    should_receive_promo_actions_info: bool = Field(
+        True, alias="shouldReceivePromoActionsInfo"
+    )
 
 
 class LoyaltyTransaction(IikoDTO):

@@ -2,11 +2,15 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class MailingCreate(StatesGroup):
-    name = State(); text = State(); image = State()
+    name = State()
+    text = State()
+    image = State()
 
 
 class MailingEdit(StatesGroup):
-    name = State(); text = State(); image = State()
+    name = State()
+    text = State()
+    image = State()
 
 
 class MailingSchedule(StatesGroup):

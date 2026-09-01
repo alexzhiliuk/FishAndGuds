@@ -17,6 +17,7 @@ dependencies = [
     "qrcode[pil]>=8.0,<9",
     "greenlet>=3.1,<4",
     "redis>=5,<8",
+    "pre-commit>=4.6.2",
 ]
 
 [dependency-groups]
@@ -24,6 +25,18 @@ dev = [
     "pytest>=8.3,<9",
     "pytest-asyncio>=0.25,<1",
 ]
+
+[tool.mypy]
+plugins = ["pydantic.mypy"]
+exclude = ["alembic/"]
+
+[[tool.mypy.overrides]]
+module = "alembic.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disable_error_code = ["arg-type", "call-arg"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

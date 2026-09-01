@@ -7,7 +7,14 @@ from sqlalchemy import func, select
 from app.integrations.iiko.dto import LoyaltyTransaction as IikoLoyaltyTransaction
 from app.models import LoyaltyTransaction, NotificationSettings, Purchase, User
 from app.repositories import MailingRepository
-from app.services import ApplicationSettingsService, LoyaltyService, MailingService, RegistrationService, RegistrationSubmission, SyncService
+from app.services import (
+    ApplicationSettingsService,
+    LoyaltyService,
+    MailingService,
+    RegistrationService,
+    RegistrationSubmission,
+    SyncService,
+)
 from app.services.phone import PhoneNormalizationService
 from tests.iiko_double import IikoTestDouble
 
@@ -15,13 +22,34 @@ ORG = "926c9ebc-27a9-4297-a970-a692f1af7f37"
 
 
 def test_mini_app_registration_submission_validation():
-    form = RegistrationSubmission.model_validate({"first_name": " Иван ", "last_name": " Иванов ", "middle_name": "", "birthday": "2000-01-02", "gender": "male", "email": "ivan@example.com", "sms_enabled": True, "push_enabled": False, "email_enabled": True, "consent": True})
+    form = RegistrationSubmission.model_validate(
+        {
+            "first_name": " Иван ",
+            "last_name": " Иванов ",
+            "middle_name": "",
+            "birthday": "2000-01-02",
+            "gender": "male",
+            "email": "ivan@example.com",
+            "sms_enabled": True,
+            "push_enabled": False,
+            "email_enabled": True,
+            "consent": True,
+        }
+    )
     assert form.first_name == "Иван"
     assert form.middle_name is None
     assert form.gender == "male"
     assert form.push_enabled is False
     with pytest.raises(ValueError):
-        RegistrationSubmission.model_validate({"first_name": "Иван", "last_name": "Иванов", "birthday": "2000-01-02", "gender": "female", "consent": False})
+        RegistrationSubmission.model_validate(
+            {
+                "first_name": "Иван",
+                "last_name": "Иванов",
+                "birthday": "2000-01-02",
+                "gender": "female",
+                "consent": False,
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -36,7 +64,9 @@ async def test_registration_document_links_are_stored_in_database(session):
 
 
 def registration(session, client):
-    return RegistrationService(session, client, default_organization_id=ORG, history_days=365, page_size=100)
+    return RegistrationService(
+        session, client, default_organization_id=ORG, history_days=365, page_size=100
+    )
 
 
 @pytest.mark.asyncio
@@ -50,15 +80,31 @@ async def test_existing_iiko_customer_is_registered_with_balance_and_card(sessio
 
 @pytest.mark.asyncio
 async def test_missing_customer_requires_form(session):
-    client = IikoTestDouble(default_organization_id=ORG, not_found_phones={"+375291111111"})
+    client = IikoTestDouble(
+        default_organization_id=ORG, not_found_phones={"+375291111111"}
+    )
     result = await registration(session, client).start(42, "+375291111111")
     assert result.needs_form and result.iiko_available
 
 
 @pytest.mark.asyncio
 async def test_new_customer_is_created_in_iiko_with_matching_unique_card(session):
-    phone = "+375291111111"; client = IikoTestDouble(default_organization_id=ORG, not_found_phones={phone})
-    user = await registration(session, client).complete(telegram_id=42, phone=phone, first_name="Иван", last_name="Иванов", middle_name=None, birthday=date(2000, 1, 2), gender="male", email=None, sms_enabled=False, push_enabled=True, email_enabled=False, consent=True)
+    phone = "+375291111111"
+    client = IikoTestDouble(default_organization_id=ORG, not_found_phones={phone})
+    user = await registration(session, client).complete(
+        telegram_id=42,
+        phone=phone,
+        first_name="Иван",
+        last_name="Иванов",
+        middle_name=None,
+        birthday=date(2000, 1, 2),
+        gender="male",
+        email=None,
+        sms_enabled=False,
+        push_enabled=True,
+        email_enabled=False,
+        consent=True,
+    )
     assert user.gender == "male"
     assert user.notification_settings.sms_enabled is False
     assert user.notification_settings.push_enabled is True
@@ -74,14 +120,29 @@ async def test_new_customer_is_created_in_iiko_with_matching_unique_card(session
 
 
 @pytest.mark.asyncio
-async def test_card_generation_skips_number_that_already_exists_in_iiko(session, monkeypatch):
-    phone = "+375291111111"; client = IikoTestDouble(default_organization_id=ORG, not_found_phones={phone})
+async def test_card_generation_skips_number_that_already_exists_in_iiko(
+    session, monkeypatch
+):
+    phone = "+375291111111"
+    client = IikoTestDouble(default_organization_id=ORG, not_found_phones={phone})
     owner = client.seed_customer("+375299999999")
-    owner.cards = [owner.cards[0].model_copy(update={"number": "98980001", "track": "98980001"})]
+    owner.cards = [
+        owner.cards[0].model_copy(update={"number": "98980001", "track": "98980001"})
+    ]
     suffixes = iter((1, 2))
     monkeypatch.setattr("app.services.iiko.randbelow", lambda _: next(suffixes))
 
-    user = await registration(session, client).complete(telegram_id=42, phone=phone, first_name="Иван", last_name="Иванов", middle_name=None, birthday=date(2000, 1, 2), gender="male", email=None, consent=True)
+    user = await registration(session, client).complete(
+        telegram_id=42,
+        phone=phone,
+        first_name="Иван",
+        last_name="Иванов",
+        middle_name=None,
+        birthday=date(2000, 1, 2),
+        gender="male",
+        email=None,
+        consent=True,
+    )
 
     assert user.loyalty_account.card_number == "98980002"
     assert client.add_card_calls == 1
@@ -97,7 +158,16 @@ async def test_existing_card_does_not_create_another_card(session):
 @pytest.mark.asyncio
 async def test_iiko_outage_completes_local_registration_with_zero_balance(session):
     client = IikoTestDouble(default_organization_id=ORG, unavailable=True)
-    user = await registration(session, client).complete(telegram_id=42, phone="+375291111111", first_name="Иван", last_name="Иванов", middle_name=None, birthday=date(2000, 1, 2), email=None, consent=True)
+    user = await registration(session, client).complete(
+        telegram_id=42,
+        phone="+375291111111",
+        first_name="Иван",
+        last_name="Иванов",
+        middle_name=None,
+        birthday=date(2000, 1, 2),
+        email=None,
+        consent=True,
+    )
     assert user.loyalty_account.iiko_sync_status.value == "pending"
     assert user.loyalty_account.last_known_balance == Decimal("0")
 
@@ -105,7 +175,16 @@ async def test_iiko_outage_completes_local_registration_with_zero_balance(sessio
 @pytest.mark.asyncio
 async def test_retry_pending_registration_searches_then_links(session):
     client = IikoTestDouble(default_organization_id=ORG, unavailable=True)
-    user = await registration(session, client).complete(telegram_id=42, phone="+375291111111", first_name="Иван", last_name="Иванов", middle_name=None, birthday=date(2000, 1, 2), email=None, consent=True)
+    user = await registration(session, client).complete(
+        telegram_id=42,
+        phone="+375291111111",
+        first_name="Иван",
+        last_name="Иванов",
+        middle_name=None,
+        birthday=date(2000, 1, 2),
+        email=None,
+        consent=True,
+    )
     client.unavailable = False
     assert await registration(session, client).sync_pending_user(user)
     assert user.loyalty_account.iiko_customer_id
@@ -127,7 +206,11 @@ async def test_transaction_sync_is_idempotent_and_skips_null_orders(session):
     initial_count = await session.scalar(select(func.count(LoyaltyTransaction.id)))
     sync = SyncService(session, client, default_organization_id=ORG)
     await sync.sync_user(user)
-    assert await session.scalar(select(func.count(LoyaltyTransaction.id))) == initial_count == 3
+    assert (
+        await session.scalar(select(func.count(LoyaltyTransaction.id)))
+        == initial_count
+        == 3
+    )
     assert await session.scalar(select(func.count(Purchase.id))) == 1
 
 
@@ -146,9 +229,37 @@ async def test_closed_order_is_saved_with_bonus_summary(session):
                 "whenCreatedOrder": "2026-08-21T14:10:09Z",
             }
             return [
-                IikoLoyaltyTransaction(id=f"earned-{pos_order_id}", revision=1, type=10, typeName="RefillWalletFromOrder", sum=684, balanceBefore=793.1, balanceAfter=1477.1, whenCreated="2026-08-21T16:03:27Z", **common),
-                IikoLoyaltyTransaction(id=f"spent-{pos_order_id}", revision=2, type=8, typeName="PayFromWallet", sum=-100, balanceBefore=893.1, balanceAfter=793.1, whenCreated="2026-08-21T16:03:27Z", **common),
-                IikoLoyaltyTransaction(id=f"closed-{pos_order_id}", revision=3, type=5, typeName="CloseOrder", sum=22800, whenCreated="2026-08-21T16:03:28Z", **common),
+                IikoLoyaltyTransaction(
+                    id=f"earned-{pos_order_id}",
+                    revision=1,
+                    type=10,
+                    typeName="RefillWalletFromOrder",
+                    sum=684,
+                    balanceBefore=793.1,
+                    balanceAfter=1477.1,
+                    whenCreated="2026-08-21T16:03:27Z",
+                    **common,
+                ),
+                IikoLoyaltyTransaction(
+                    id=f"spent-{pos_order_id}",
+                    revision=2,
+                    type=8,
+                    typeName="PayFromWallet",
+                    sum=-100,
+                    balanceBefore=893.1,
+                    balanceAfter=793.1,
+                    whenCreated="2026-08-21T16:03:27Z",
+                    **common,
+                ),
+                IikoLoyaltyTransaction(
+                    id=f"closed-{pos_order_id}",
+                    revision=3,
+                    type=5,
+                    typeName="CloseOrder",
+                    sum=22800,
+                    whenCreated="2026-08-21T16:03:28Z",
+                    **common,
+                ),
             ]
 
     client = SummaryOnlyIiko(default_organization_id=ORG)
@@ -182,7 +293,9 @@ async def test_missing_wallet_is_zero_and_zero_wallet_stays_zero(session):
 @pytest.mark.asyncio
 async def test_by_date_pagination_and_cross_organization_duplicates(session):
     client = IikoTestDouble(default_organization_id=ORG)
-    service = RegistrationService(session, client, default_organization_id=ORG, history_days=365, page_size=1)
+    service = RegistrationService(
+        session, client, default_organization_id=ORG, history_days=365, page_size=1
+    )
     await service.start(42, "+375291234567")
     assert await session.scalar(select(func.count(LoyaltyTransaction.id))) == 3
 
@@ -190,20 +303,25 @@ async def test_by_date_pagination_and_cross_organization_duplicates(session):
 def test_phone_normalization_rejects_malformed_and_collapses_formatting():
     assert PhoneNormalizationService.normalize("8 (999) 123-45-67") == "+79991234567"
     assert PhoneNormalizationService.normalize("+7 999 123 45 67") == "+79991234567"
-    with pytest.raises(ValueError): PhoneNormalizationService.normalize("123")
+    with pytest.raises(ValueError):
+        PhoneNormalizationService.normalize("123")
 
 
 @pytest.mark.asyncio
 async def test_profile_without_loyalty_account(session):
-    session.add(User(telegram_id=7, first_name="No", phone="+10000000000")); await session.commit()
+    session.add(User(telegram_id=7, first_name="No", phone="+10000000000"))
+    await session.commit()
     assert await LoyaltyService(session).get_profile(7) is None
 
 
 @pytest.mark.asyncio
 async def test_organization_sync_is_idempotent(session):
-    client = IikoTestDouble(default_organization_id=ORG); sync = SyncService(session, client, default_organization_id=ORG)
-    await sync.sync_restaurants(); await sync.sync_restaurants()
+    client = IikoTestDouble(default_organization_id=ORG)
+    sync = SyncService(session, client, default_organization_id=ORG)
+    await sync.sync_restaurants()
+    await sync.sync_restaurants()
     from app.models import Restaurant
+
     assert await session.scalar(select(func.count(Restaurant.id))) == 2
 
 
@@ -213,35 +331,68 @@ async def test_iiko_sync_preserves_locally_managed_restaurant_links(session):
     sync = SyncService(session, client, default_organization_id=ORG)
     await sync.sync_restaurants()
     from app.services import RestaurantService
+
     restaurant = (await RestaurantService(session).list_all())[0]
-    await RestaurantService(session).update_local_link(restaurant.id, "reviews_url", "https://yandex.by/maps/org/example/reviews/")
+    await RestaurantService(session).update_local_link(
+        restaurant.id, "reviews_url", "https://yandex.by/maps/org/example/reviews/"
+    )
 
     await sync.sync_restaurants()
 
     refreshed = await RestaurantService(session).get(restaurant.id)
     assert refreshed.reviews_url == "https://yandex.by/maps/org/example/reviews/"
-    assert refreshed.website_url in {"https://bistro.example.com", "https://restaurant.example.com"}
+    assert refreshed.website_url in {
+        "https://bistro.example.com",
+        "https://restaurant.example.com",
+    }
 
 
 @pytest.mark.asyncio
 async def test_mailing_counts_failures_and_excludes_admin(session):
-    session.add_all([User(telegram_id=1, first_name="A", phone="+10000000001"), User(telegram_id=2, first_name="B", phone="+10000000002"), User(telegram_id=3, first_name="C", phone="+10000000003")]); await session.commit()
-    service = MailingService(session); item = await service.create("Promo", "Hello")
+    session.add_all(
+        [
+            User(telegram_id=1, first_name="A", phone="+10000000001"),
+            User(telegram_id=2, first_name="B", phone="+10000000002"),
+            User(telegram_id=3, first_name="C", phone="+10000000003"),
+        ]
+    )
+    await session.commit()
+    service = MailingService(session)
+    item = await service.create("Promo", "Hello")
+
     async def sender(uid, text, image):
-        if uid == 3: raise RuntimeError("blocked")
+        if uid == 3:
+            raise RuntimeError("blocked")
+
     run = await service.send(item.id, sender, excluded_telegram_ids=(1,))
     assert (run.total_count, run.sent_count, run.failed_count) == (2, 1, 1)
 
 
 @pytest.mark.asyncio
 async def test_telegram_mailing_respects_push_preference(session):
-    session.add_all([
-        User(telegram_id=10, first_name="Push", phone="+10000000010", notification_settings=NotificationSettings(push_enabled=True)),
-        User(telegram_id=11, first_name="No push", phone="+10000000011", notification_settings=NotificationSettings(push_enabled=False)),
-    ]); await session.commit()
+    session.add_all(
+        [
+            User(
+                telegram_id=10,
+                first_name="Push",
+                phone="+10000000010",
+                notification_settings=NotificationSettings(push_enabled=True),
+            ),
+            User(
+                telegram_id=11,
+                first_name="No push",
+                phone="+10000000011",
+                notification_settings=NotificationSettings(push_enabled=False),
+            ),
+        ]
+    )
+    await session.commit()
     item = await MailingService(session).create("Promo", "Hello")
     recipients = []
-    async def sender(uid, text, image): recipients.append(uid)
+
+    async def sender(uid, text, image):
+        recipients.append(uid)
+
     run = await MailingService(session).send(item.id, sender)
     assert recipients == [10]
     assert run.total_count == 1
@@ -249,8 +400,12 @@ async def test_telegram_mailing_respects_push_preference(session):
 
 @pytest.mark.asyncio
 async def test_sent_mailing_edit_resets_to_draft_and_delete_works(session):
-    service = MailingService(session); item = await service.create("Old", "Original")
-    async def sender(uid, text, image): return None
+    service = MailingService(session)
+    item = await service.create("Old", "Original")
+
+    async def sender(uid, text, image):
+        return None
+
     await service.send(item.id, sender)
     assert (await service.update(item.id, text="Updated")).status.value == "draft"
     await service.delete(item.id)

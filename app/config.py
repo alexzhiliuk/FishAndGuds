@@ -41,7 +41,9 @@ class Settings(BaseSettings):
     def parse_admin_ids(cls, value):
         if isinstance(value, str):
             cleaned = value.strip().removeprefix("[").removesuffix("]")
-            return tuple(int(item.strip()) for item in cleaned.split(",") if item.strip())
+            return tuple(
+                int(item.strip()) for item in cleaned.split(",") if item.strip()
+            )
         if isinstance(value, int):
             return (value,)
         return tuple(value) if value else ()
@@ -63,7 +65,9 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_card_format(self):
         if self.iiko_card_number_length <= len(self.iiko_card_number_prefix):
-            raise ValueError("IIKO_CARD_NUMBER_LENGTH must be greater than the prefix length")
+            raise ValueError(
+                "IIKO_CARD_NUMBER_LENGTH must be greater than the prefix length"
+            )
         if self.iiko_card_generation_attempts < 1:
             raise ValueError("IIKO_CARD_GENERATION_ATTEMPTS must be positive")
         return self

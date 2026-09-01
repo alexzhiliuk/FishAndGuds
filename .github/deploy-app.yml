@@ -1,0 +1,71 @@
+- name: Deploy backend
+  hosts: app
+  serial: 1
+  gather_facts: false
+  vars:
+    deploy_path: "{{ lookup('env', 'DEPLOY_PATH') }}"
+    healthcheck_url: "{{ lookup('env', 'HEALTHCHECK_URL') }}"
+
+  tasks:
+    - name: Check git status
+      command: git status --porcelain
+      args:
+        chdir: "{{ deploy_path }}"
+      register: git_status
+      changed_when: false
+      tags: [deploy, git_status]
+
+    - name: Check current branch
+      command: git branch --show-current
+      args:
+        chdir: "{{ deploy_path }}"
+      register: current_branch
+      changed_when: false
+      tags: [deploy, git_status]
+
+    - name: Display git status
+      debug:
+        msg: "Git status: {{ git_status.stdout_lines | default('No changes') }}"
+      tags: [deploy, git_status]
+
+    - name: Display current branch
+      debug:
+        msg: "Current branch: {{ current_branch.stdout }}"
+      tags: [deploy, git_status]
+
+    - name: Fail if there are local changes
+      fail:
+        msg: "Repository has local changes in tracked files. Please commit or stash them before deployment."
+      when: git_status.stdout | length > 0
+      tags: [deploy, git_status]
+
+    - name: Fail if not on correct branch
+      fail:
+        msg: "Repository is on branch '{{ current_branch.stdout }}' but you try deploy '{{ branch }}'"
+      when: current_branch.stdout != branch
+      tags: [deploy, git_status]
+
+    - name: Pull latest code
+      shell: git pull origin {{ branch }} --rebase
+      args:
+        chdir: "{{ deploy_path }}"
+
+    - name: Rebuild and restart
+      shell: docker compose up -d --build
+      args:
+        chdir: "{{ deploy_path }}"
+
+    - name: Run migrations
+      shell: docker compose run --rm migration
+      args:
+        chdir: "{{ deploy_path }}"
+
+    - name: Verify deployment
+      uri:
+        url: "{{ healthcheck_url }}"
+        status_code: [200, 404]
+      register: result
+      until: result.status == 200 or result.status == 404
+      retries: 3
+      delay: 5
+      ignore_errors: true

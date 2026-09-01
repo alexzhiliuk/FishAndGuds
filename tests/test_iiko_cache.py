@@ -52,8 +52,12 @@ async def test_customer_balance_is_never_cached():
     cache = MemoryCache()
     client = cached_client(backend, cache)
 
-    await client.get_customer_info(organization_id=backend.default_organization_id, phone="+375291111111")
-    await client.get_customer_info(organization_id=backend.default_organization_id, phone="+375291111111")
+    await client.get_customer_info(
+        organization_id=backend.default_organization_id, phone="+375291111111"
+    )
+    await client.get_customer_info(
+        organization_id=backend.default_organization_id, phone="+375291111111"
+    )
 
     assert backend.customer_calls == 2
     assert cache.writes == []

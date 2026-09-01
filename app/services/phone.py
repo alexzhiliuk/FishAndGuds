@@ -18,4 +18,3 @@ class PhoneNormalizationService:
     @staticmethod
     def mask(value: str) -> str:
         return value[:3] + "***" + value[-2:] if len(value) > 6 else "***"
-

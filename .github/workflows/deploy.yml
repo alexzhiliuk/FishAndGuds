@@ -1,0 +1,162 @@
+# Required secrets (repo → Settings → Secrets → Actions):
+#   Dev:   DEPLOY_SSH_KEY_DEV, DEPLOY_HOST_DEV, DEPLOY_USER_DEV, DEPLOY_PATH_DEV
+#   Prod:  DEPLOY_SSH_KEY_PROD, DEPLOY_HOST_PROD, DEPLOY_USER_PROD, DEPLOY_PATH_PROD, MOYSKLAD_TOKEN_PROD
+# Variables:
+#   Prod:  SITE_URL_PROD, ANSIBLE_HOSTS_INI, HEALTHCHECK_URL
+# Manual: Actions → Backend → Run workflow → choose target & branch
+
+name: Backend
+
+on:
+  push:
+    branches:
+      - "dev"
+      - "main"
+
+  pull_request:
+    types: [synchronize, opened, reopened, ready_for_review]
+
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Deploy target"
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+
+  build-check:
+    name: Build Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Build Docker image
+        run: docker build -t fish-backend .
+
+  deploy-prod:
+    name: Deploy to PROD
+    runs-on: ubuntu-latest
+    needs: [build-check]
+    if: |
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.target == 'prod')
+
+    steps:
+      - name: Check required secrets
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY_PROD }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_PROD }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER_PROD }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH_PROD }}
+          MOYSKLAD_TOKEN: ${{ secrets.MOYSKLAD_TOKEN_PROD }}
+          SITE_URL: ${{ vars.SITE_URL_PROD }}
+        run: |
+          if [ -z "${DEPLOY_SSH_KEY}" ]; then
+            echo "❌ Error: DEPLOY_SSH_KEY_PROD secret is not configured"
+            echo "Please add DEPLOY_SSH_KEY_PROD in: Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          if [ -z "${DEPLOY_HOST}" ]; then echo "❌ DEPLOY_HOST_PROD not configured"; exit 1; fi
+          if [ -z "${DEPLOY_USER}" ]; then echo "❌ DEPLOY_USER_PROD not configured"; exit 1; fi
+          if [ -z "${DEPLOY_PATH}" ]; then echo "❌ DEPLOY_PATH_PROD not configured"; exit 1; fi
+          if [ -z "${MOYSKLAD_TOKEN}" ]; then echo "❌ MOYSKLAD_TOKEN_PROD not configured"; exit 1; fi
+          if [ -z "${SITE_URL}" ]; then echo "❌ SITE_URL_PROD variable not configured"; exit 1; fi
+          echo "✅ All required secrets are configured"
+
+      - name: Setup SSH key
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY_PROD }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_PROD }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Debug SSH key format
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY_PROD }}
+        run: |
+          echo "Key file size: ${#DEPLOY_SSH_KEY} chars"
+          echo "First line: $(head -1 ~/.ssh/deploy_key)"
+          echo "Last line: $(tail -1 ~/.ssh/deploy_key)"
+          echo "Key format check:"
+          head -1 ~/.ssh/deploy_key | grep -q "BEGIN" && echo "  ✅ Has BEGIN marker" || echo "  ❌ No BEGIN marker"
+          tail -1 ~/.ssh/deploy_key | grep -q "END" && echo "  ✅ Has END marker" || echo "  ❌ No END marker"
+          echo "Line endings:"
+          head -1 ~/.ssh/deploy_key | cat -A | head -c 100
+          echo ""
+
+      - name: Deploy to remote server
+        env:
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER_PROD }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_PROD }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH_PROD }}
+          EXPECTED_BRANCH: ${{ github.ref_name }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=no \
+            ${DEPLOY_USER}@${DEPLOY_HOST} \
+            "DEPLOY_PATH='${DEPLOY_PATH}' EXPECTED_BRANCH='${EXPECTED_BRANCH}' bash -s" << 'EOF'
+          set -e
+          echo "Deploying to: ${DEPLOY_PATH}"
+          cd ${DEPLOY_PATH}
+
+          if [ ! -d ".git" ]; then
+            echo "Error: .git directory not found in ${DEPLOY_PATH}"
+            exit 1
+          fi
+
+          current_branch=$(git rev-parse --abbrev-ref HEAD) || { echo "Error: Failed to get current branch"; exit 1; }
+          echo "Server branch: '${current_branch}', Expected: '${EXPECTED_BRANCH}'"
+
+          if [ "${current_branch}" != "${EXPECTED_BRANCH}" ]; then
+            echo "Deploy aborted: server is on '${current_branch}', workflow triggered from '${EXPECTED_BRANCH}'"
+            exit 1
+          fi
+
+          if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+            echo "Deploy aborted: uncommitted changes on server"
+            exit 1
+          fi
+
+          git pull origin ${EXPECTED_BRANCH} --rebase
+
+          touch .env
+          chmod 600 .env
+
+          upsert_env() {
+            key="$1"
+            value="$2"
+            tmp_file="$(mktemp)"
+            awk -v key="$key" -v value="$value" '
+              BEGIN { found = 0 }
+              $0 ~ "^" key "=" { print key "=" value; found = 1; next }
+              { print }
+              END { if (!found) print key "=" value }
+            ' .env > "$tmp_file"
+            mv "$tmp_file" .env
+          }
+
+          docker compose build
+          docker compose up -d
+
+          echo "✅ Deployment completed successfully!"
+          EOF

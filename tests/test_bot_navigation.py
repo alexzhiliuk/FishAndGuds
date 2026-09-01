@@ -26,7 +26,12 @@ from app.bot.keyboards.common import (
 
 
 def callback_data(markup):
-    return [button.callback_data for row in markup.inline_keyboard for button in row if button.callback_data]
+    return [
+        button.callback_data
+        for row in markup.inline_keyboard
+        for button in row
+        if button.callback_data
+    ]
 
 
 def test_purchase_quantity_has_no_insignificant_zeroes():
@@ -55,7 +60,9 @@ def test_purchase_summary_displays_order_and_bonus_totals_without_items():
 
 @pytest.mark.asyncio
 async def test_text_screen_replaces_previous_photo_message():
-    message = SimpleNamespace(photo=[object()], delete=AsyncMock(), answer=AsyncMock(), edit_text=AsyncMock())
+    message = SimpleNamespace(
+        photo=[object()], delete=AsyncMock(), answer=AsyncMock(), edit_text=AsyncMock()
+    )
 
     await user_handlers.edit_content(message, "Главное меню", reply_markup="keyboard")
 
@@ -79,23 +86,41 @@ def test_main_menu_is_inline_and_uses_callback_navigation():
 
 
 def test_main_menu_welcome_text_is_shared_and_complete():
-    assert user_handlers.MAIN_MENU_TEXT.startswith("<b>Добро пожаловать в клуб гедонистических привилегий")
-    assert "<i>Здесь ваше удовольствие превращается в приятные бонусы." in user_handlers.MAIN_MENU_TEXT
+    assert user_handlers.MAIN_MENU_TEXT.startswith(
+        "<b>Добро пожаловать в клуб гедонистических привилегий"
+    )
+    assert (
+        "<i>Здесь ваше удовольствие превращается в приятные бонусы."
+        in user_handlers.MAIN_MENU_TEXT
+    )
     assert user_handlers.MAIN_MENU_TEXT.endswith("Море волнуется за вас!</i>")
 
 
 def test_admin_menu_does_not_expose_users_button():
-    assert callback_data(admin_menu()) == ["admin:create", "admin:list", "admin:restaurants", "admin:legal", "nav:main"]
+    assert callback_data(admin_menu()) == [
+        "admin:create",
+        "admin:list",
+        "admin:restaurants",
+        "admin:legal",
+        "nav:main",
+    ]
 
 
 def test_admin_can_edit_registration_document_links():
-    assert callback_data(admin_legal_links_keyboard()) == ["legal_link:privacy_policy_url", "legal_link:loyalty_rules_url", "menu:admin"]
+    assert callback_data(admin_legal_links_keyboard()) == [
+        "legal_link:privacy_policy_url",
+        "legal_link:loyalty_rules_url",
+        "menu:admin",
+    ]
 
 
 def test_admin_can_select_restaurant_and_each_local_link():
     items = [SimpleNamespace(id=5, name="Рыба и гады")]
 
-    assert callback_data(admin_restaurants_keyboard(items)) == ["admin:restaurant:5", "menu:admin"]
+    assert callback_data(admin_restaurants_keyboard(items)) == [
+        "admin:restaurant:5",
+        "menu:admin",
+    ]
     assert callback_data(admin_restaurant_links_keyboard(5)) == [
         "restaurant_link:delivery_url:5",
         "restaurant_link:reviews_url:5",
@@ -122,7 +147,9 @@ def test_sent_mailing_remains_editable_and_resendable():
 
 
 def test_mailing_input_has_back_navigation():
-    assert callback_data(mailing_input_back("mail:input_back:7:2")) == ["mail:input_back:7:2"]
+    assert callback_data(mailing_input_back("mail:input_back:7:2")) == [
+        "mail:input_back:7:2"
+    ]
 
 
 def test_mailing_edit_actions_preserve_list_page():
@@ -185,7 +212,9 @@ async def test_delete_mailing_returns_to_originating_list_page(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_retried_delete_of_missing_mailing_still_returns_to_list(monkeypatch):
-    service = SimpleNamespace(delete=AsyncMock(side_effect=ValueError("Рассылка не найдена")))
+    service = SimpleNamespace(
+        delete=AsyncMock(side_effect=ValueError("Рассылка не найдена"))
+    )
     show_list = AsyncMock()
     monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
     monkeypatch.setattr(admin_handlers, "show_mailing_list", show_list)
@@ -205,9 +234,18 @@ async def test_retried_delete_of_missing_mailing_still_returns_to_list(monkeypat
 
 
 def test_mailing_name_list_has_selection_and_pagination():
-    items = [SimpleNamespace(id=5, name="Летнее меню"), SimpleNamespace(id=6, name="День рождения")]
+    items = [
+        SimpleNamespace(id=5, name="Летнее меню"),
+        SimpleNamespace(id=6, name="День рождения"),
+    ]
     markup = mailing_list_keyboard(items, page=1, has_next=True)
-    assert callback_data(markup) == ["mail:open:5:1", "mail:open:6:1", "admin:list:0", "admin:list:2", "menu:admin"]
+    assert callback_data(markup) == [
+        "mail:open:5:1",
+        "mail:open:6:1",
+        "admin:list:0",
+        "admin:list:2",
+        "menu:admin",
+    ]
 
 
 def test_profile_and_notifications_have_back_navigation():
@@ -222,7 +260,9 @@ def test_profile_and_notifications_have_back_navigation():
 
     assert "profile:main" in callback_data(profile_keyboard())
     assert "nav:profile" in callback_data(notifications_keyboard(settings))
-    assert {"notify:sms", "notify:push", "notify:email"}.issubset(callback_data(notifications_keyboard(settings)))
+    assert {"notify:sms", "notify:push", "notify:email"}.issubset(
+        callback_data(notifications_keyboard(settings))
+    )
     assert "purchases:back" in callback_data(purchases_keyboard(page=0, has_next=False))
 
 
@@ -307,10 +347,16 @@ async def test_registered_user_unknown_text_returns_main_menu(monkeypatch):
         answer=AsyncMock(),
     )
     settings = SimpleNamespace(admin_ids=(42,))
-    service = SimpleNamespace(get_local_user=AsyncMock(return_value=SimpleNamespace(id=1)))
-    monkeypatch.setattr(user_handlers, "registration_service", lambda session, iiko, settings: service)
+    service = SimpleNamespace(
+        get_local_user=AsyncMock(return_value=SimpleNamespace(id=1))
+    )
+    monkeypatch.setattr(
+        user_handlers, "registration_service", lambda session, iiko, settings: service
+    )
 
-    await user_handlers.fallback(message, session=object(), settings=settings, iiko=object())
+    await user_handlers.fallback(
+        message, session=object(), settings=settings, iiko=object()
+    )
 
     message.answer.assert_awaited_once()
     markup = message.answer.await_args.kwargs["reply_markup"]
@@ -323,10 +369,14 @@ async def test_unregistered_user_unknown_text_gets_contact_prompt(monkeypatch):
     settings = SimpleNamespace()
     service = SimpleNamespace(get_local_user=AsyncMock(return_value=None))
     prompt = AsyncMock()
-    monkeypatch.setattr(user_handlers, "registration_service", lambda session, iiko, settings: service)
+    monkeypatch.setattr(
+        user_handlers, "registration_service", lambda session, iiko, settings: service
+    )
     monkeypatch.setattr(user_handlers, "send_registration_prompt", prompt)
 
-    await user_handlers.fallback(message, session=object(), settings=settings, iiko=object())
+    await user_handlers.fallback(
+        message, session=object(), settings=settings, iiko=object()
+    )
 
     prompt.assert_awaited_once_with(message, settings)
 

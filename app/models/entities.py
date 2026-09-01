@@ -2,26 +2,51 @@ import enum
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Enum, Float, ForeignKey, JSON, Numeric, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
 
 
 class IikoSyncStatus(str, enum.Enum):
-    pending = "pending"; synced = "synced"; error = "error"
+    pending = "pending"
+    synced = "synced"
+    error = "error"
 
 
 class MailingType(str, enum.Enum):
-    manual = "manual"; scheduled = "scheduled"; birthday = "birthday"; holiday = "holiday"
+    manual = "manual"
+    scheduled = "scheduled"
+    birthday = "birthday"
+    holiday = "holiday"
 
 
 class MailingStatus(str, enum.Enum):
-    draft = "draft"; scheduled = "scheduled"; sending = "sending"; sent = "sent"; cancelled = "cancelled"; failed = "failed"
+    draft = "draft"
+    scheduled = "scheduled"
+    sending = "sending"
+    sent = "sent"
+    cancelled = "cancelled"
+    failed = "failed"
 
 
 class RunStatus(str, enum.Enum):
-    sending = "sending"; sent = "sent"; failed = "failed"
+    sending = "sending"
+    sent = "sent"
+    failed = "failed"
 
 
 class ApplicationSetting(Base, TimestampMixin):
@@ -41,18 +66,30 @@ class User(Base, TimestampMixin):
     birthday: Mapped[date | None] = mapped_column(Date)
     gender: Mapped[str | None] = mapped_column(String(16))
     email: Mapped[str | None] = mapped_column(String(254))
-    personal_data_consent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    personal_data_consent_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    loyalty_account: Mapped["LoyaltyAccount | None"] = relationship(back_populates="user", cascade="all, delete-orphan", uselist=False)
-    notification_settings: Mapped["NotificationSettings | None"] = relationship(back_populates="user", cascade="all, delete-orphan", uselist=False)
-    loyalty_transactions: Mapped[list["LoyaltyTransaction"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    purchases: Mapped[list["Purchase"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    loyalty_account: Mapped["LoyaltyAccount | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+    notification_settings: Mapped["NotificationSettings | None"] = relationship(
+        back_populates="user", cascade="all, delete-orphan", uselist=False
+    )
+    loyalty_transactions: Mapped[list["LoyaltyTransaction"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    purchases: Mapped[list["Purchase"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
 
 
 class LoyaltyAccount(Base, TimestampMixin):
     __tablename__ = "loyalty_accounts"
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
     iiko_customer_id: Mapped[str | None] = mapped_column(String(128), unique=True)
     iiko_card_id: Mapped[str | None] = mapped_column(String(128))
     card_number: Mapped[str | None] = mapped_column(String(64), unique=True)
@@ -63,7 +100,9 @@ class LoyaltyAccount(Base, TimestampMixin):
     balance_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_transaction_revision: Mapped[int | None] = mapped_column(BigInteger)
     last_transaction_id: Mapped[str | None] = mapped_column(String(128))
-    iiko_sync_status: Mapped[IikoSyncStatus] = mapped_column(Enum(IikoSyncStatus), default=IikoSyncStatus.pending, index=True)
+    iiko_sync_status: Mapped[IikoSyncStatus] = mapped_column(
+        Enum(IikoSyncStatus), default=IikoSyncStatus.pending, index=True
+    )
     iiko_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     user: Mapped[User] = relationship(back_populates="loyalty_account")
 
@@ -89,7 +128,9 @@ class LoyaltyTransaction(Base):
     __tablename__ = "loyalty_transactions"
     id: Mapped[int] = mapped_column(primary_key=True)
     external_id: Mapped[str] = mapped_column(String(128), unique=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     wallet_id: Mapped[str | None] = mapped_column(String(128))
     program_id: Mapped[str | None] = mapped_column(String(128))
     type: Mapped[str] = mapped_column(String(64))
@@ -105,18 +146,26 @@ class LoyaltyTransaction(Base):
     terminal_group_id: Mapped[str | None] = mapped_column(String(128))
     is_delivery: Mapped[bool | None] = mapped_column(Boolean)
     is_ignored: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at_iiko: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at_iiko: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     when_created_order: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revision: Mapped[int] = mapped_column(BigInteger)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     user: Mapped[User] = relationship(back_populates="loyalty_transactions")
 
 
 class Purchase(Base, TimestampMixin):
     __tablename__ = "purchases"
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
-    restaurant_id: Mapped[int | None] = mapped_column(ForeignKey("restaurants.id", ondelete="SET NULL"))
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    restaurant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("restaurants.id", ondelete="SET NULL")
+    )
     pos_order_id: Mapped[str] = mapped_column(String(128), unique=True)
     order_number: Mapped[str | None] = mapped_column(String(64))
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
@@ -131,14 +180,18 @@ class Purchase(Base, TimestampMixin):
 class NotificationSettings(Base):
     __tablename__ = "notification_settings"
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), unique=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
     promotions_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     news_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     holidays_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sms_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     email_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
     user: Mapped[User] = relationship(back_populates="notification_settings")
 
 
@@ -148,20 +201,32 @@ class Mailing(Base, TimestampMixin):
     name: Mapped[str] = mapped_column(String(200))
     text: Mapped[str] = mapped_column(Text)
     image_file_id: Mapped[str | None] = mapped_column(String(500))
-    type: Mapped[MailingType] = mapped_column(Enum(MailingType), default=MailingType.manual)
-    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    status: Mapped[MailingStatus] = mapped_column(Enum(MailingStatus), default=MailingStatus.draft, index=True)
-    runs: Mapped[list["MailingRun"]] = relationship(back_populates="mailing", cascade="all, delete-orphan")
+    type: Mapped[MailingType] = mapped_column(
+        Enum(MailingType), default=MailingType.manual
+    )
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
+    status: Mapped[MailingStatus] = mapped_column(
+        Enum(MailingStatus), default=MailingStatus.draft, index=True
+    )
+    runs: Mapped[list["MailingRun"]] = relationship(
+        back_populates="mailing", cascade="all, delete-orphan"
+    )
 
 
 class MailingRun(Base):
     __tablename__ = "mailing_runs"
     id: Mapped[int] = mapped_column(primary_key=True)
-    mailing_id: Mapped[int] = mapped_column(ForeignKey("mailings.id", ondelete="CASCADE"), index=True)
+    mailing_id: Mapped[int] = mapped_column(
+        ForeignKey("mailings.id", ondelete="CASCADE"), index=True
+    )
     total_count: Mapped[int] = mapped_column(default=0)
     sent_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)
-    status: Mapped[RunStatus] = mapped_column(Enum(RunStatus), default=RunStatus.sending)
+    status: Mapped[RunStatus] = mapped_column(
+        Enum(RunStatus), default=RunStatus.sending
+    )
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)

@@ -13,7 +13,13 @@ async def test_healthcheck_without_bot_does_not_expose_webhook():
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok"}
-    business_paths = {route.path for route in app.routes if not route.path.startswith("/docs") and route.path != "/openapi.json" and route.path != "/redoc"}
+    business_paths = {
+        route.path
+        for route in app.routes
+        if not route.path.startswith("/docs")
+        and route.path != "/openapi.json"
+        and route.path != "/redoc"
+    }
     assert business_paths == {"/healthz", "/registration"}
 
 
@@ -80,7 +86,9 @@ async def test_telegram_webhook_checks_secret_and_feeds_update():
 
 @pytest.mark.asyncio
 async def test_telegram_webhook_rejects_invalid_update():
-    app = create_api(bot=object(), dispatcher=DispatcherStub(), webhook_secret="test_secret")
+    app = create_api(
+        bot=object(), dispatcher=DispatcherStub(), webhook_secret="test_secret"
+    )
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
@@ -96,13 +104,22 @@ async def test_telegram_webhook_rejects_invalid_update():
 @pytest.mark.asyncio
 async def test_telegram_webhook_deduplicates_update_id():
     dispatcher = DispatcherStub()
-    app = create_api(bot=object(), dispatcher=dispatcher, webhook_secret="test_secret", cache=CacheStub())
+    app = create_api(
+        bot=object(),
+        dispatcher=dispatcher,
+        webhook_secret="test_secret",
+        cache=CacheStub(),
+    )
     transport = httpx.ASGITransport(app=app)
     headers = {"X-Telegram-Bot-Api-Secret-Token": "test_secret"}
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        first = await client.post("/telegram/webhook", json={"update_id": 10}, headers=headers)
-        duplicate = await client.post("/telegram/webhook", json={"update_id": 10}, headers=headers)
+        first = await client.post(
+            "/telegram/webhook", json={"update_id": 10}, headers=headers
+        )
+        duplicate = await client.post(
+            "/telegram/webhook", json={"update_id": 10}, headers=headers
+        )
 
     assert first.status_code == 200
     assert duplicate.status_code == 200
@@ -115,7 +132,12 @@ async def test_telegram_webhook_acknowledges_handler_error_to_prevent_retries():
         async def feed_update(self, bot, update):
             raise RuntimeError("handler failed after a side effect")
 
-    app = create_api(bot=object(), dispatcher=FailingDispatcher(), webhook_secret="test_secret", cache=CacheStub())
+    app = create_api(
+        bot=object(),
+        dispatcher=FailingDispatcher(),
+        webhook_secret="test_secret",
+        cache=CacheStub(),
+    )
     transport = httpx.ASGITransport(app=app)
 
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

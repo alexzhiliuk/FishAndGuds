@@ -16,9 +16,24 @@ depends_on = None
 
 def upgrade():
     op.add_column("users", sa.Column("gender", sa.String(16), nullable=True))
-    op.add_column("notification_settings", sa.Column("sms_enabled", sa.Boolean(), server_default=sa.true(), nullable=False))
-    op.add_column("notification_settings", sa.Column("push_enabled", sa.Boolean(), server_default=sa.true(), nullable=False))
-    op.add_column("notification_settings", sa.Column("email_enabled", sa.Boolean(), server_default=sa.true(), nullable=False))
+    op.add_column(
+        "notification_settings",
+        sa.Column(
+            "sms_enabled", sa.Boolean(), server_default=sa.true(), nullable=False
+        ),
+    )
+    op.add_column(
+        "notification_settings",
+        sa.Column(
+            "push_enabled", sa.Boolean(), server_default=sa.true(), nullable=False
+        ),
+    )
+    op.add_column(
+        "notification_settings",
+        sa.Column(
+            "email_enabled", sa.Boolean(), server_default=sa.true(), nullable=False
+        ),
+    )
 
 
 def downgrade():
