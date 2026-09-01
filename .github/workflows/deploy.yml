@@ -64,8 +64,6 @@ jobs:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST_PROD }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER_PROD }}
           DEPLOY_PATH: ${{ secrets.DEPLOY_PATH_PROD }}
-          MOYSKLAD_TOKEN: ${{ secrets.MOYSKLAD_TOKEN_PROD }}
-          SITE_URL: ${{ vars.SITE_URL_PROD }}
         run: |
           if [ -z "${DEPLOY_SSH_KEY}" ]; then
             echo "❌ Error: DEPLOY_SSH_KEY_PROD secret is not configured"
@@ -75,8 +73,6 @@ jobs:
           if [ -z "${DEPLOY_HOST}" ]; then echo "❌ DEPLOY_HOST_PROD not configured"; exit 1; fi
           if [ -z "${DEPLOY_USER}" ]; then echo "❌ DEPLOY_USER_PROD not configured"; exit 1; fi
           if [ -z "${DEPLOY_PATH}" ]; then echo "❌ DEPLOY_PATH_PROD not configured"; exit 1; fi
-          if [ -z "${MOYSKLAD_TOKEN}" ]; then echo "❌ MOYSKLAD_TOKEN_PROD not configured"; exit 1; fi
-          if [ -z "${SITE_URL}" ]; then echo "❌ SITE_URL_PROD variable not configured"; exit 1; fi
           echo "✅ All required secrets are configured"
 
       - name: Setup SSH key
