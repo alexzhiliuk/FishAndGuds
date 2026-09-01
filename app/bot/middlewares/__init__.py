@@ -1,1 +1,3 @@
-from app.bot.middlewares.db import DatabaseMiddleware as DatabaseMiddleware
+from app.bot.middlewares.db import DatabaseMiddleware
+
+__all__ = ["DatabaseMiddleware"]

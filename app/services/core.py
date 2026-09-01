@@ -87,7 +87,9 @@ class LoyaltyService:
     def generate_qr(payload: str) -> bytes:
         image = qrcode.make(payload)
         stream = io.BytesIO()
-        image.save(stream, format="PNG")
+        # qrcode's runtime accepts the Pillow-compatible format argument, but
+        # types-qrcode also models the fallback PyPNG implementation here.
+        image.save(stream, format="PNG")  # type: ignore[call-arg]
         return stream.getvalue()
 
 

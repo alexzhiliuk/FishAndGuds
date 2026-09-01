@@ -14,6 +14,7 @@ async def answer_with_buttons(
     reply_markup=None,
     **kwargs,
 ):
+    await clear_inline_keyboard(message)
     return await message.answer(
         text,
         reply_markup=reply_markup,
@@ -29,6 +30,7 @@ async def answer_photo_with_buttons(
     reply_markup=None,
     **kwargs,
 ):
+    await clear_inline_keyboard(message)
     return await message.answer_photo(
         photo,
         caption=caption,

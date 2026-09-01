@@ -24,11 +24,8 @@ class IikoOrganization(IikoDTO):
     def extract_website(cls, value):
         if not isinstance(value, dict) or value.get("website_url"):
             return value
-        additional = (
-            value.get("additionalInfo")
-            if isinstance(value.get("additionalInfo"), dict)
-            else {}
-        )
+        raw_additional = value.get("additionalInfo")
+        additional = raw_additional if isinstance(raw_additional, dict) else {}
         website = next(
             (
                 candidate

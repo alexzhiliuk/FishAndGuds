@@ -4,22 +4,53 @@ from pathlib import Path
 from aiogram import F, Router
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import BufferedInputFile, CallbackQuery, FSInputFile, Message, ReplyKeyboardRemove
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    FSInputFile,
+    Message,
+    ReplyKeyboardRemove,
+)
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.bot.keyboards.common import (action_keyboard, back_keyboard, loyalty_terms_keyboard, main_menu, notifications_keyboard,
-                                      phone_keyboard, profile_keyboard, purchases_keyboard, restaurant_keyboard,
-                                      registration_web_app_keyboard)
-from app.bot.navigation import answer_photo_with_buttons, answer_with_buttons, clear_inline_keyboard
+from app.bot.keyboards.common import (
+    action_keyboard,
+    back_keyboard,
+    loyalty_terms_keyboard,
+    main_menu,
+    notifications_keyboard,
+    phone_keyboard,
+    profile_keyboard,
+    purchases_keyboard,
+    restaurant_keyboard,
+    registration_web_app_keyboard,
+)
+from app.bot.navigation import (
+    answer_photo_with_buttons,
+    answer_with_buttons,
+)
 from app.bot.states import RegistrationForm
 from app.config import Settings
 from app.integrations.iiko.client import IikoClient
-from app.services import ApplicationSettingsService, LoyaltyService, NotificationService, PurchaseService, RegistrationService, RegistrationSubmission, RestaurantService
+from app.services import (
+    ApplicationSettingsService,
+    LoyaltyService,
+    NotificationService,
+    PurchaseService,
+    RegistrationService,
+    RegistrationSubmission,
+    RestaurantService,
+)
 
 router = Router(name="user")
 logger = logging.getLogger(__name__)
-ACTIONS = {"booking": ("🍽 Перейти к бронированию", "website_url", "🍽 Бронирование"), "delivery": ("🛵 Заказать доставку", "delivery_url", "🛵 Доставка"), "reviews": ("⭐ Открыть Яндекс.Карты", "reviews_url", "⭐ Отзывы"), "contact": ("🌐 Открыть сайт ресторана", "website_url", "📞 Контакты")}
+ACTIONS = {
+    "booking": ("🍽 Перейти к бронированию", "website_url", "🍽 Бронирование"),
+    "delivery": ("🛵 Заказать доставку", "delivery_url", "🛵 Доставка"),
+    "reviews": ("⭐ Открыть Яндекс.Карты", "reviews_url", "⭐ Отзывы"),
+    "contact": ("🌐 Открыть сайт ресторана", "website_url", "📞 Контакты"),
+}
 RESTAURANT_PROMPTS = {
     "booking": "Выберите ресторан, в котором хотите забронировать столик:",
     "delivery": "Выберите ресторан, из которого хотите оформить доставку:",
@@ -45,7 +76,9 @@ def format_purchase(purchase) -> str:
     order_text = f"Заказ №{purchase.order_number}\n" if purchase.order_number else ""
     bonus_lines = []
     if purchase.bonus_earned:
-        bonus_lines.append(f"Начислено баллов: {format_quantity(purchase.bonus_earned)}")
+        bonus_lines.append(
+            f"Начислено баллов: {format_quantity(purchase.bonus_earned)}"
+        )
     if purchase.bonus_spent:
         bonus_lines.append(f"Списано баллов: {format_quantity(purchase.bonus_spent)}")
     bonus_text = "\n" + "\n".join(bonus_lines) if bonus_lines else ""
@@ -54,17 +87,23 @@ def format_purchase(purchase) -> str:
 
 
 async def send_visual(message: Message, path: Path, caption: str, **kwargs):
-    await clear_inline_keyboard(message)
     reply_markup = kwargs.pop("reply_markup", None)
     if path.exists():
-        return await answer_photo_with_buttons(message, FSInputFile(path), caption, reply_markup=reply_markup, **kwargs)
-    return await answer_with_buttons(message, caption, reply_markup=reply_markup, **kwargs)
+        return await answer_photo_with_buttons(
+            message, FSInputFile(path), caption, reply_markup=reply_markup, **kwargs
+        )
+    return await answer_with_buttons(
+        message, caption, reply_markup=reply_markup, **kwargs
+    )
 
 
-async def send_main_menu(message: Message, user_id: int, settings: Settings, text: str = MAIN_MENU_TEXT):
-    await clear_inline_keyboard(message)
+async def send_main_menu(
+    message: Message, user_id: int, settings: Settings, text: str = MAIN_MENU_TEXT
+):
     is_admin = user_id in settings.admin_ids
-    await answer_with_buttons(message, text, reply_markup=main_menu(is_admin), parse_mode="HTML")
+    await answer_with_buttons(
+        message, text, reply_markup=main_menu(is_admin), parse_mode="HTML"
+    )
 
 
 async def send_registration_prompt(message: Message, settings: Settings):
@@ -78,19 +117,37 @@ async def send_registration_prompt(message: Message, settings: Settings):
 
 
 def registration_service(session, iiko, settings):
-    return RegistrationService(session, iiko, default_organization_id=settings.iiko_default_organization_id, history_days=settings.iiko_transaction_history_days, page_size=settings.iiko_transaction_page_size, card_number_prefix=settings.iiko_card_number_prefix, card_number_length=settings.iiko_card_number_length, card_generation_attempts=settings.iiko_card_generation_attempts)
+    return RegistrationService(
+        session,
+        iiko,
+        default_organization_id=settings.iiko_default_organization_id,
+        history_days=settings.iiko_transaction_history_days,
+        page_size=settings.iiko_transaction_page_size,
+        card_number_prefix=settings.iiko_card_number_prefix,
+        card_number_length=settings.iiko_card_number_length,
+        card_generation_attempts=settings.iiko_card_generation_attempts,
+    )
 
 
-async def send_profile(message: Message, user_id: int, session: AsyncSession, settings: Settings, iiko: IikoClient | None = None):
-    await clear_inline_keyboard(message)
-    data = await LoyaltyService(session, iiko, settings.iiko_default_organization_id).get_profile(user_id)
+async def send_profile(
+    message: Message,
+    user_id: int,
+    session: AsyncSession,
+    settings: Settings,
+    iiko: IikoClient | None = None,
+):
+    data = await LoyaltyService(
+        session, iiko, settings.iiko_default_organization_id
+    ).get_profile(user_id)
     if not data:
         await send_registration_prompt(message, settings)
         return
     user, card = data["user"], data["card"]
-    full_name = " ".join(filter(None, [user.last_name, user.first_name, user.middle_name]))
+    full_name = " ".join(
+        filter(None, [user.last_name, user.first_name, user.middle_name])
+    )
     card_text = f"№{card.card_number}" if card.card_number else "ещё синхронизируется"
-    text=f"👤 Личный кабинет\n\nИмя: {full_name}\nКарта: {card_text}\nБаланс: {data['balance']:.0f} бонусов"
+    text = f"👤 Личный кабинет\n\nИмя: {full_name}\nКарта: {card_text}\nБаланс: {data['balance']:.0f} бонусов"
     await answer_with_buttons(message, text, reply_markup=profile_keyboard())
 
 
@@ -98,46 +155,74 @@ async def send_restaurants(message: Message, session: AsyncSession, action: str)
     items = await RestaurantService(session).list_active()
     kwargs = {"reply_markup": restaurant_keyboard(items, action)}
     text = RESTAURANT_PROMPTS[action]
-    await clear_inline_keyboard(message)
     await answer_with_buttons(message, text, **kwargs)
 
 
 @router.message(CommandStart())
-async def start(message: Message, session: AsyncSession, settings: Settings, iiko: IikoClient):
-    user = await registration_service(session, iiko, settings).get_local_user(message.from_user.id)
+async def start(
+    message: Message, session: AsyncSession, settings: Settings, iiko: IikoClient
+):
+    user = await registration_service(session, iiko, settings).get_local_user(
+        message.from_user.id
+    )
     if not user:
-        await send_registration_prompt(message, settings); return
+        await send_registration_prompt(message, settings)
+        return
     await message.answer("Открываю главное меню.", reply_markup=ReplyKeyboardRemove())
     await send_main_menu(message, message.from_user.id, settings)
 
 
 @router.message(F.contact)
-async def register(message: Message, state: FSMContext, session: AsyncSession, iiko: IikoClient, settings: Settings):
+async def register(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    iiko: IikoClient,
+    settings: Settings,
+):
     if message.contact.user_id not in (None, message.from_user.id):
-        await message.answer("Пожалуйста, отправьте именно свой номер кнопкой ниже."); return
+        await message.answer("Пожалуйста, отправьте именно свой номер кнопкой ниже.")
+        return
     try:
-        result = await registration_service(session, iiko, settings).start(message.from_user.id, message.contact.phone_number)
+        result = await registration_service(session, iiko, settings).start(
+            message.from_user.id, message.contact.phone_number
+        )
         await message.answer("Спасибо!", reply_markup=ReplyKeyboardRemove())
         if result.user:
             await message.answer("Карта найдена и подключена! Добро пожаловать!")
-            await send_main_menu(message, message.from_user.id, settings); return
-        await state.clear(); await state.update_data(phone=message.contact.phone_number, iiko_available=result.iiko_available)
+            await send_main_menu(message, message.from_user.id, settings)
+            return
+        await state.clear()
+        await state.update_data(
+            phone=message.contact.phone_number, iiko_available=result.iiko_available
+        )
         await state.set_state(RegistrationForm.mini_app)
         await answer_with_buttons(
             message,
             "Карта не найдена. Заполните короткую анкету:",
-            reply_markup=registration_web_app_keyboard(settings.registration_web_app_url),
+            reply_markup=registration_web_app_keyboard(
+                settings.registration_web_app_url
+            ),
         )
     except Exception:
-        logger.exception("Registration failed"); await message.answer("Не удалось получить данные. Попробуйте ещё раз позже.")
+        logger.exception("Registration failed")
+        await message.answer("Не удалось получить данные. Попробуйте ещё раз позже.")
 
 
 @router.message(RegistrationForm.mini_app, F.web_app_data)
-async def registration_complete(message: Message, state: FSMContext, session: AsyncSession, iiko: IikoClient, settings: Settings):
+async def registration_complete(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    iiko: IikoClient,
+    settings: Settings,
+):
     try:
         form = RegistrationSubmission.model_validate_json(message.web_app_data.data)
     except ValidationError:
-        await message.answer("Анкета содержит некорректные данные. Откройте её и проверьте обязательные поля.")
+        await message.answer(
+            "Анкета содержит некорректные данные. Откройте её и проверьте обязательные поля."
+        )
         return
     data = await state.get_data()
     user = await registration_service(session, iiko, settings).complete(
@@ -156,32 +241,46 @@ async def registration_complete(message: Message, state: FSMContext, session: As
     )
     pending = user.loyalty_account.iiko_sync_status.value != "synced"
     await state.clear()
-    await message.answer("Регистрация завершена." + (" Карта создаётся автоматически." if pending else " Карта подключена."), reply_markup=ReplyKeyboardRemove())
+    await message.answer(
+        "Регистрация завершена."
+        + (" Карта создаётся автоматически." if pending else " Карта подключена."),
+        reply_markup=ReplyKeyboardRemove(),
+    )
     await send_main_menu(message, message.from_user.id, settings)
 
 
 @router.message(F.text == "👤 Личный кабинет")
-async def profile(message: Message, session: AsyncSession, settings: Settings, iiko: IikoClient):
+async def profile(
+    message: Message, session: AsyncSession, settings: Settings, iiko: IikoClient
+):
     await send_profile(message, message.from_user.id, session, settings, iiko)
 
 
 @router.callback_query(F.data == "menu:profile")
-async def profile_callback(callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient):
-    data = await LoyaltyService(session, iiko, settings.iiko_default_organization_id).get_profile(callback.from_user.id)
+async def profile_callback(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient
+):
+    data = await LoyaltyService(
+        session, iiko, settings.iiko_default_organization_id
+    ).get_profile(callback.from_user.id)
     if not data:
         await send_registration_prompt(callback.message, settings)
         await callback.answer()
         return
     user, card = data["user"], data["card"]
-    full_name = " ".join(filter(None, [user.last_name, user.first_name, user.middle_name])); card_text = f"№{card.card_number}" if card.card_number else "ещё синхронизируется"
+    full_name = " ".join(
+        filter(None, [user.last_name, user.first_name, user.middle_name])
+    )
+    card_text = f"№{card.card_number}" if card.card_number else "ещё синхронизируется"
     text = f"👤 Личный кабинет\n\nИмя: {full_name}\nКарта: {card_text}\nБаланс: {data['balance']:.0f} бонусов"
-    await clear_inline_keyboard(callback.message)
     await answer_with_buttons(callback.message, text, reply_markup=profile_keyboard())
     await callback.answer()
 
 
 @router.callback_query(F.data == "nav:profile")
-async def profile_back(callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient):
+async def profile_back(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient
+):
     await send_profile(callback.message, callback.from_user.id, session, settings, iiko)
     await callback.answer()
 
@@ -199,12 +298,19 @@ async def profile_to_main(callback: CallbackQuery, settings: Settings):
 
 
 @router.callback_query(F.data.in_({"profile:qr", "menu:qr"}))
-async def qr(callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient):
-    data=await LoyaltyService(session, iiko, settings.iiko_default_organization_id).get_profile(callback.from_user.id)
-    if not data: await callback.answer("Карта не найдена", show_alert=True); return
-    if not data["card"].qr_payload: await callback.answer("Карта ещё синхронизируется", show_alert=True); return
-    content=LoyaltyService.generate_qr(data["card"].qr_payload)
-    await clear_inline_keyboard(callback.message)
+async def qr(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient
+):
+    data = await LoyaltyService(
+        session, iiko, settings.iiko_default_organization_id
+    ).get_profile(callback.from_user.id)
+    if not data:
+        await callback.answer("Карта не найдена", show_alert=True)
+        return
+    if not data["card"].qr_payload:
+        await callback.answer("Карта ещё синхронизируется", show_alert=True)
+        return
+    content = LoyaltyService.generate_qr(data["card"].qr_payload)
     if callback.data == "menu:qr":
         await answer_photo_with_buttons(
             callback.message,
@@ -226,21 +332,28 @@ async def qr(callback: CallbackQuery, session: AsyncSession, settings: Settings,
 async def purchases(callback: CallbackQuery, session: AsyncSession, settings: Settings):
     page_value = callback.data.split(":", 1)[1]
     if page_value == "back":
-        await clear_inline_keyboard(callback.message)
         await send_profile(callback.message, callback.from_user.id, session, settings)
         await callback.answer()
         return
-    page=int(page_value); result=await PurchaseService(session).page_for_telegram(callback.from_user.id, page)
-    if result is None: await callback.answer("Сначала зарегистрируйтесь", show_alert=True); return
-    rows, has_next=result
-    if not rows: text="История покупок пока пуста."
+    page = int(page_value)
+    result = await PurchaseService(session).page_for_telegram(
+        callback.from_user.id, page
+    )
+    if result is None:
+        await callback.answer("Сначала зарегистрируйтесь", show_alert=True)
+        return
+    rows, has_next = result
+    if not rows:
+        text = "История покупок пока пуста."
     else:
-        chunks=[]
+        chunks = []
         for p in rows:
             chunks.append(format_purchase(p))
-        text="🧾 История покупок\n\n"+"\n\n".join(chunks)
-    await clear_inline_keyboard(callback.message)
-    await answer_with_buttons(callback.message, text, reply_markup=purchases_keyboard(page,has_next)); await callback.answer()
+        text = "🧾 История покупок\n\n" + "\n\n".join(chunks)
+    await answer_with_buttons(
+        callback.message, text, reply_markup=purchases_keyboard(page, has_next)
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "profile:terms")
@@ -251,37 +364,71 @@ async def terms(callback: CallbackQuery, session: AsyncSession):
         "📜 Условия программы лояльности\n\n"
         "Ознакомиться с условиями программы лояльности можно по ссылке ниже."
     )
-    text += f"\n\n{rules_url}" if rules_url else "\n\nСсылка пока не указана администратором."
-    await clear_inline_keyboard(callback.message)
+    text += (
+        f"\n\n{rules_url}"
+        if rules_url
+        else "\n\nСсылка пока не указана администратором."
+    )
     await answer_with_buttons(
         callback.message,
         text,
         reply_markup=loyalty_terms_keyboard(rules_url),
-    ); await callback.answer()
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "notifications:show")
 async def notification_show(callback: CallbackQuery, session: AsyncSession):
-    notification_settings=await NotificationService(session).get_settings(callback.from_user.id)
-    if not notification_settings: await callback.answer("Сначала зарегистрируйтесь", show_alert=True); return
-    await clear_inline_keyboard(callback.message)
-    await answer_with_buttons(callback.message, "🔔 Уведомления\n\nВыберите категорию, чтобы включить или отключить её.", reply_markup=notifications_keyboard(notification_settings)); await callback.answer()
+    notification_settings = await NotificationService(session).get_settings(
+        callback.from_user.id
+    )
+    if not notification_settings:
+        await callback.answer("Сначала зарегистрируйтесь", show_alert=True)
+        return
+    await answer_with_buttons(
+        callback.message,
+        "🔔 Уведомления\n\nВыберите категорию, чтобы включить или отключить её.",
+        reply_markup=notifications_keyboard(notification_settings),
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("notify:"))
 async def notification_toggle(callback: CallbackQuery, session: AsyncSession):
-    settings=await NotificationService(session).toggle(callback.from_user.id,callback.data.split(":")[1])
-    await clear_inline_keyboard(callback.message)
-    await answer_with_buttons(callback.message, "🔔 Уведомления\n\nНастройки сохранены. Выберите категорию, чтобы включить или отключить её.", reply_markup=notifications_keyboard(settings)); await callback.answer("Настройки сохранены")
+    settings = await NotificationService(session).toggle(
+        callback.from_user.id, callback.data.split(":")[1]
+    )
+    await answer_with_buttons(
+        callback.message,
+        "🔔 Уведомления\n\nНастройки сохранены. Выберите категорию, чтобы включить или отключить её.",
+        reply_markup=notifications_keyboard(settings),
+    )
+    await callback.answer("Настройки сохранены")
 
 
-@router.message(F.text.in_({"🍽 Забронировать", "🛵 Заказать доставку", "⭐ Оставить отзыв", "📞 Связаться с рестораном"}))
+@router.message(
+    F.text.in_(
+        {
+            "🍽 Забронировать",
+            "🛵 Заказать доставку",
+            "⭐ Оставить отзыв",
+            "📞 Связаться с рестораном",
+        }
+    )
+)
 async def choose_restaurant(message: Message, session: AsyncSession):
-    action={"🍽 Забронировать":"booking","🛵 Заказать доставку":"delivery","⭐ Оставить отзыв":"reviews","📞 Связаться с рестораном":"contact"}[message.text]
+    action = {
+        "🍽 Забронировать": "booking",
+        "🛵 Заказать доставку": "delivery",
+        "⭐ Оставить отзыв": "reviews",
+        "📞 Связаться с рестораном": "contact",
+    }[message.text]
     await send_restaurants(message, session, action)
 
 
-@router.callback_query(F.data.in_({"menu:booking", "menu:delivery", "menu:reviews", "menu:contact"}))
+@router.callback_query(
+    F.data.in_({"menu:booking", "menu:delivery", "menu:reviews", "menu:contact"})
+)
 async def choose_restaurant_callback(callback: CallbackQuery, session: AsyncSession):
     action = callback.data.split(":", 1)[1]
     await send_restaurants(callback.message, session, action)
@@ -296,18 +443,35 @@ async def restaurants_back(callback: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data.startswith("restaurant:"))
-async def restaurant_action(callback: CallbackQuery, session: AsyncSession, settings: Settings):
-    _,action,item_id=callback.data.split(":"); item=await RestaurantService(session).get(int(item_id)); label,field,title=ACTIONS[action]
-    if not item: await callback.answer("Ресторан не найден",show_alert=True); return
-    text=f"{title}\n\n{item.name}\n📍 {item.address}"
-    url=getattr(item,field)
-    if not url: text += "\n\nСсылка временно недоступна."
-    await send_visual(callback.message,settings.assets_dir/(item.image_name or "gallery_10.jpeg"),text,reply_markup=action_keyboard(label,url,action)); await callback.answer()
+async def restaurant_action(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    _, action, item_id = callback.data.split(":")
+    item = await RestaurantService(session).get(int(item_id))
+    label, field, title = ACTIONS[action]
+    if not item:
+        await callback.answer("Ресторан не найден", show_alert=True)
+        return
+    text = f"{title}\n\n{item.name}\n📍 {item.address}"
+    url = getattr(item, field)
+    if not url:
+        text += "\n\nСсылка временно недоступна."
+    await send_visual(
+        callback.message,
+        settings.assets_dir / (item.image_name or "gallery_10.jpeg"),
+        text,
+        reply_markup=action_keyboard(label, url, action),
+    )
+    await callback.answer()
 
 
 @router.message()
-async def fallback(message: Message, session: AsyncSession, settings: Settings, iiko: IikoClient):
-    user = await registration_service(session, iiko, settings).get_local_user(message.from_user.id)
+async def fallback(
+    message: Message, session: AsyncSession, settings: Settings, iiko: IikoClient
+):
+    user = await registration_service(session, iiko, settings).get_local_user(
+        message.from_user.id
+    )
     if user:
         await send_main_menu(message, message.from_user.id, settings)
     else:
