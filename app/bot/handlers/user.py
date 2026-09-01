@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards.common import (action_keyboard, back_keyboard, loyalty_terms_keyboard, main_menu, notifications_keyboard,
                                       phone_keyboard, profile_keyboard, purchases_keyboard, restaurant_keyboard,
                                       registration_web_app_keyboard)
-from app.bot.navigation import clear_inline_keyboard
+from app.bot.navigation import answer_photo_with_buttons, answer_with_buttons, clear_inline_keyboard
 from app.bot.states import RegistrationForm
 from app.config import Settings
 from app.integrations.iiko.client import IikoClient
@@ -19,7 +19,7 @@ from app.services import ApplicationSettingsService, LoyaltyService, Notificatio
 
 router = Router(name="user")
 logger = logging.getLogger(__name__)
-ACTIONS = {"booking": ("Перейти к бронированию", "website_url", "🍽 Бронирование"), "delivery": ("Заказать доставку", "delivery_url", "🛵 Доставка"), "reviews": ("Открыть Яндекс.Карты", "reviews_url", "⭐ Отзывы"), "contact": ("Открыть сайт ресторана", "website_url", "📞 Контакты")}
+ACTIONS = {"booking": ("🍽 Перейти к бронированию", "website_url", "🍽 Бронирование"), "delivery": ("🛵 Заказать доставку", "delivery_url", "🛵 Доставка"), "reviews": ("⭐ Открыть Яндекс.Карты", "reviews_url", "⭐ Отзывы"), "contact": ("🌐 Открыть сайт ресторана", "website_url", "📞 Контакты")}
 RESTAURANT_PROMPTS = {
     "booking": "Выберите ресторан, в котором хотите забронировать столик:",
     "delivery": "Выберите ресторан, из которого хотите оформить доставку:",
@@ -55,13 +55,16 @@ def format_purchase(purchase) -> str:
 
 async def send_visual(message: Message, path: Path, caption: str, **kwargs):
     await clear_inline_keyboard(message)
-    if path.exists(): return await message.answer_photo(FSInputFile(path), caption=caption, **kwargs)
-    return await message.answer(caption, **kwargs)
+    reply_markup = kwargs.pop("reply_markup", None)
+    if path.exists():
+        return await answer_photo_with_buttons(message, FSInputFile(path), caption, reply_markup=reply_markup, **kwargs)
+    return await answer_with_buttons(message, caption, reply_markup=reply_markup, **kwargs)
 
 
 async def send_main_menu(message: Message, user_id: int, settings: Settings, text: str = MAIN_MENU_TEXT):
     await clear_inline_keyboard(message)
-    await message.answer(text, reply_markup=main_menu(user_id in settings.admin_ids), parse_mode="HTML")
+    is_admin = user_id in settings.admin_ids
+    await answer_with_buttons(message, text, reply_markup=main_menu(is_admin), parse_mode="HTML")
 
 
 async def send_registration_prompt(message: Message, settings: Settings):
@@ -88,7 +91,7 @@ async def send_profile(message: Message, user_id: int, session: AsyncSession, se
     full_name = " ".join(filter(None, [user.last_name, user.first_name, user.middle_name]))
     card_text = f"№{card.card_number}" if card.card_number else "ещё синхронизируется"
     text=f"👤 Личный кабинет\n\nИмя: {full_name}\nКарта: {card_text}\nБаланс: {data['balance']:.0f} бонусов"
-    await message.answer(text, reply_markup=profile_keyboard())
+    await answer_with_buttons(message, text, reply_markup=profile_keyboard())
 
 
 async def send_restaurants(message: Message, session: AsyncSession, action: str):
@@ -96,7 +99,7 @@ async def send_restaurants(message: Message, session: AsyncSession, action: str)
     kwargs = {"reply_markup": restaurant_keyboard(items, action)}
     text = RESTAURANT_PROMPTS[action]
     await clear_inline_keyboard(message)
-    await message.answer(text, **kwargs)
+    await answer_with_buttons(message, text, **kwargs)
 
 
 @router.message(CommandStart())
@@ -120,7 +123,8 @@ async def register(message: Message, state: FSMContext, session: AsyncSession, i
             await send_main_menu(message, message.from_user.id, settings); return
         await state.clear(); await state.update_data(phone=message.contact.phone_number, iiko_available=result.iiko_available)
         await state.set_state(RegistrationForm.mini_app)
-        await message.answer(
+        await answer_with_buttons(
+            message,
             "Карта не найдена. Заполните короткую анкету:",
             reply_markup=registration_web_app_keyboard(settings.registration_web_app_url),
         )
@@ -172,7 +176,7 @@ async def profile_callback(callback: CallbackQuery, session: AsyncSession, setti
     full_name = " ".join(filter(None, [user.last_name, user.first_name, user.middle_name])); card_text = f"№{card.card_number}" if card.card_number else "ещё синхронизируется"
     text = f"👤 Личный кабинет\n\nИмя: {full_name}\nКарта: {card_text}\nБаланс: {data['balance']:.0f} бонусов"
     await clear_inline_keyboard(callback.message)
-    await callback.message.answer(text, reply_markup=profile_keyboard())
+    await answer_with_buttons(callback.message, text, reply_markup=profile_keyboard())
     await callback.answer()
 
 
@@ -202,15 +206,17 @@ async def qr(callback: CallbackQuery, session: AsyncSession, settings: Settings,
     content=LoyaltyService.generate_qr(data["card"].qr_payload)
     await clear_inline_keyboard(callback.message)
     if callback.data == "menu:qr":
-        await callback.message.answer_photo(
+        await answer_photo_with_buttons(
+            callback.message,
             BufferedInputFile(content, filename="loyalty-qr.png"),
-            caption=f"Карта №{data['card'].card_number}",
+            f"Карта №{data['card'].card_number}",
             reply_markup=back_keyboard("nav:main"),
         )
     else:
-        await callback.message.answer_photo(
+        await answer_photo_with_buttons(
+            callback.message,
             BufferedInputFile(content, filename="loyalty-qr.png"),
-            caption=f"Карта №{data['card'].card_number}",
+            f"Карта №{data['card'].card_number}",
             reply_markup=back_keyboard("nav:profile"),
         )
     await callback.answer()
@@ -234,7 +240,7 @@ async def purchases(callback: CallbackQuery, session: AsyncSession, settings: Se
             chunks.append(format_purchase(p))
         text="🧾 История покупок\n\n"+"\n\n".join(chunks)
     await clear_inline_keyboard(callback.message)
-    await callback.message.answer(text, reply_markup=purchases_keyboard(page,has_next)); await callback.answer()
+    await answer_with_buttons(callback.message, text, reply_markup=purchases_keyboard(page,has_next)); await callback.answer()
 
 
 @router.callback_query(F.data == "profile:terms")
@@ -247,7 +253,8 @@ async def terms(callback: CallbackQuery, session: AsyncSession):
     )
     text += f"\n\n{rules_url}" if rules_url else "\n\nСсылка пока не указана администратором."
     await clear_inline_keyboard(callback.message)
-    await callback.message.answer(
+    await answer_with_buttons(
+        callback.message,
         text,
         reply_markup=loyalty_terms_keyboard(rules_url),
     ); await callback.answer()
@@ -258,14 +265,14 @@ async def notification_show(callback: CallbackQuery, session: AsyncSession):
     notification_settings=await NotificationService(session).get_settings(callback.from_user.id)
     if not notification_settings: await callback.answer("Сначала зарегистрируйтесь", show_alert=True); return
     await clear_inline_keyboard(callback.message)
-    await callback.message.answer("🔔 Уведомления\n\nВыберите категорию, чтобы включить или отключить её.", reply_markup=notifications_keyboard(notification_settings)); await callback.answer()
+    await answer_with_buttons(callback.message, "🔔 Уведомления\n\nВыберите категорию, чтобы включить или отключить её.", reply_markup=notifications_keyboard(notification_settings)); await callback.answer()
 
 
 @router.callback_query(F.data.startswith("notify:"))
 async def notification_toggle(callback: CallbackQuery, session: AsyncSession):
     settings=await NotificationService(session).toggle(callback.from_user.id,callback.data.split(":")[1])
     await clear_inline_keyboard(callback.message)
-    await callback.message.answer("🔔 Уведомления\n\nНастройки сохранены. Выберите категорию, чтобы включить или отключить её.", reply_markup=notifications_keyboard(settings)); await callback.answer("Настройки сохранены")
+    await answer_with_buttons(callback.message, "🔔 Уведомления\n\nНастройки сохранены. Выберите категорию, чтобы включить или отключить её.", reply_markup=notifications_keyboard(settings)); await callback.answer("Настройки сохранены")
 
 
 @router.message(F.text.in_({"🍽 Забронировать", "🛵 Заказать доставку", "⭐ Оставить отзыв", "📞 Связаться с рестораном"}))

@@ -16,7 +16,7 @@ def registration_web_app_keyboard(url: str):
 def main_menu(is_admin: bool = False):
     rows = [
         [
-            InlineKeyboardButton(text="▣ QR", callback_data="menu:qr"),
+            InlineKeyboardButton(text="🔳 QR-код", callback_data="menu:qr"),
             InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu:profile"),
         ],
         [
@@ -34,7 +34,7 @@ def main_menu(is_admin: bool = False):
 
 
 def profile_keyboard():
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="▣ Показать QR", callback_data="profile:qr"), InlineKeyboardButton(text="🧾 Покупки", callback_data="purchases:0")], [InlineKeyboardButton(text="🔔 Уведомления", callback_data="notifications:show")], [InlineKeyboardButton(text="📜 Условия программы", callback_data="profile:terms")], [InlineKeyboardButton(text="⬅️ Назад", callback_data="profile:main")]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔳 Показать QR", callback_data="profile:qr"), InlineKeyboardButton(text="🧾 Покупки", callback_data="purchases:0")], [InlineKeyboardButton(text="🔔 Уведомления", callback_data="notifications:show")], [InlineKeyboardButton(text="📜 Условия программы", callback_data="profile:terms")], [InlineKeyboardButton(text="⬅️ Назад", callback_data="profile:main")]])
 
 
 def loyalty_terms_keyboard(rules_url: str | None):
@@ -57,7 +57,7 @@ def notifications_keyboard(settings):
 
 
 def restaurant_keyboard(restaurants, action: str):
-    rows = [[InlineKeyboardButton(text=r.name, callback_data=f"restaurant:{action}:{r.id}")] for r in restaurants]
+    rows = [[InlineKeyboardButton(text=f"🏪 {r.name}", callback_data=f"restaurant:{action}:{r.id}")] for r in restaurants]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:main")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -80,8 +80,8 @@ def mailing_input_back(callback_data: str):
 
 def purchases_keyboard(page: int, has_next: bool):
     row=[]
-    if page: row.append(InlineKeyboardButton(text="←", callback_data=f"purchases:{page-1}"))
-    if has_next: row.append(InlineKeyboardButton(text="→", callback_data=f"purchases:{page+1}"))
+    if page: row.append(InlineKeyboardButton(text="◀️ Предыдущая", callback_data=f"purchases:{page-1}"))
+    if has_next: row.append(InlineKeyboardButton(text="Следующая ▶️", callback_data=f"purchases:{page+1}"))
     rows = [row] if row else []
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="purchases:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -100,7 +100,7 @@ def admin_legal_links_keyboard():
 
 
 def admin_restaurants_keyboard(items):
-    rows = [[InlineKeyboardButton(text=item.name[:55], callback_data=f"admin:restaurant:{item.id}")] for item in items]
+    rows = [[InlineKeyboardButton(text=f"🏪 {item.name[:52]}", callback_data=f"admin:restaurant:{item.id}")] for item in items]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -114,10 +114,10 @@ def admin_restaurant_links_keyboard(item_id: int):
 
 
 def mailing_list_keyboard(items, page: int, has_next: bool):
-    rows = [[InlineKeyboardButton(text=item.name[:55], callback_data=f"mail:open:{item.id}:{page}")] for item in items]
+    rows = [[InlineKeyboardButton(text=f"📨 {item.name[:52]}", callback_data=f"mail:open:{item.id}:{page}")] for item in items]
     pagination = []
-    if page > 0: pagination.append(InlineKeyboardButton(text="←", callback_data=f"admin:list:{page - 1}"))
-    if has_next: pagination.append(InlineKeyboardButton(text="→", callback_data=f"admin:list:{page + 1}"))
+    if page > 0: pagination.append(InlineKeyboardButton(text="◀️ Предыдущая", callback_data=f"admin:list:{page - 1}"))
+    if has_next: pagination.append(InlineKeyboardButton(text="Следующая ▶️", callback_data=f"admin:list:{page + 1}"))
     if pagination: rows.append(pagination)
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)

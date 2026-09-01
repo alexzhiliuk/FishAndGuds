@@ -153,6 +153,12 @@ def test_main_menu_welcome_text_is_shared_and_complete():
     assert user_handlers.MAIN_MENU_TEXT.endswith("Море волнуется за вас!</i>")
 
 
+def test_main_menu_text_does_not_duplicate_keyboard_actions():
+    assert "Выберите действие:" not in user_handlers.MAIN_MENU_TEXT
+    assert "🔳 QR-код" not in user_handlers.MAIN_MENU_TEXT
+    assert "⚙️ Админ-панель" not in user_handlers.MAIN_MENU_TEXT
+
+
 def test_admin_menu_does_not_expose_users_button():
     assert callback_data(admin_menu()) == ["admin:create", "admin:list", "admin:restaurants", "admin:legal", "nav:main"]
 
