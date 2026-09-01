@@ -1,27 +1,18 @@
-default_language_version:
-  python: python3.12
-
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
-    hooks:
-      - id: check-merge-conflict
-      - id: check-toml
-      - id: check-yaml
-      - id: trailing-whitespace
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.15.15
     hooks:
-      - id: ruff-check
+      - id: ruff
         args: [--fix]
       - id: ruff-format
-
-  - repo: local
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.16.0
     hooks:
       - id: mypy
-        name: mypy
-        entry: uv run --frozen mypy --follow-imports=skip
-        language: system
-        require_serial: true
-        types: [python]
+        exclude: ^alembic/
+        additional_dependencies:
+          - fastapi
+          - sqlalchemy[asyncio]
+          - pydantic
+          - pydantic-settings
+          - types-requests
