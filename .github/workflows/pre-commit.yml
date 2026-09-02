@@ -16,23 +16,22 @@ concurrency:
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11"]
     steps:
       - name: "Checkout ${{ github.ref }} ( ${{ github.sha }} )"
         uses: actions/checkout@v4
         with:
           persist-credentials: false
           submodules: recursive
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.12"
+
       - name: Install dependencies
-        run: pip install pre-commit==4.2.0
+        run: uv sync --frozen --group dev
+
       - name: pre-commit
-        run: pre-commit run --all-files
+        run: uv run pre-commit run --all-files
 
   tests:
     runs-on: ubuntu-latest

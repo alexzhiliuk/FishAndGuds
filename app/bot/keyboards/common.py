@@ -27,7 +27,12 @@ def registration_web_app_keyboard(url: str):
 
 def main_menu(is_admin: bool = False):
     rows = [
-        [InlineKeyboardButton(text="👤 Личный кабинет", callback_data="menu:profile")],
+        [
+            InlineKeyboardButton(text="🔳 QR-код", callback_data="menu:qr"),
+            InlineKeyboardButton(
+                text="👤 Личный кабинет", callback_data="menu:profile"
+            ),
+        ],
         [
             InlineKeyboardButton(text="🍽 Забронировать", callback_data="menu:booking"),
             InlineKeyboardButton(
@@ -54,10 +59,8 @@ def profile_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="▣ Показать QR", callback_data="profile:qr"),
-                InlineKeyboardButton(
-                    text="🧾 История покупок", callback_data="purchases:0"
-                ),
+                InlineKeyboardButton(text="🔳 Показать QR", callback_data="profile:qr"),
+                InlineKeyboardButton(text="🧾 Покупки", callback_data="purchases:0"),
             ],
             [
                 InlineKeyboardButton(
@@ -74,19 +77,11 @@ def profile_keyboard():
     )
 
 
-def legal_documents_keyboard(privacy_url: str | None, rules_url: str | None):
+def loyalty_terms_keyboard(rules_url: str | None):
     rows = []
-    if privacy_url:
-        rows.append(
-            [InlineKeyboardButton(text="🔒 Политика обработки данных", url=privacy_url)]
-        )
     if rules_url:
         rows.append(
-            [
-                InlineKeyboardButton(
-                    text="📜 Правила программы лояльности", url=rules_url
-                )
-            ]
+            [InlineKeyboardButton(text="📜 Ознакомиться с условиями", url=rules_url)]
         )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:profile")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -136,7 +131,11 @@ def notifications_keyboard(settings):
 
 def restaurant_keyboard(restaurants, action: str):
     rows = [
-        [InlineKeyboardButton(text=r.name, callback_data=f"restaurant:{action}:{r.id}")]
+        [
+            InlineKeyboardButton(
+                text=f"🏪 {r.name}", callback_data=f"restaurant:{action}:{r.id}"
+            )
+        ]
         for r in restaurants
     ]
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:main")])
@@ -147,7 +146,9 @@ def action_keyboard(label: str, url: str | None, action: str):
     rows = []
     if url:
         rows.append([InlineKeyboardButton(text=label, url=url)])
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=f"menu:{action}")])
+    rows.append(
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"restaurants:{action}")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -171,11 +172,15 @@ def purchases_keyboard(page: int, has_next: bool):
     row = []
     if page:
         row.append(
-            InlineKeyboardButton(text="←", callback_data=f"purchases:{page - 1}")
+            InlineKeyboardButton(
+                text="◀️ Предыдущая", callback_data=f"purchases:{page - 1}"
+            )
         )
     if has_next:
         row.append(
-            InlineKeyboardButton(text="→", callback_data=f"purchases:{page + 1}")
+            InlineKeyboardButton(
+                text="Следующая ▶️", callback_data=f"purchases:{page + 1}"
+            )
         )
     rows = [row] if row else []
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="purchases:back")])
@@ -221,7 +226,7 @@ def admin_legal_links_keyboard():
                     callback_data="legal_link:loyalty_rules_url",
                 )
             ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")],
         ]
     )
 
@@ -230,12 +235,12 @@ def admin_restaurants_keyboard(items):
     rows = [
         [
             InlineKeyboardButton(
-                text=item.name[:55], callback_data=f"admin:restaurant:{item.id}"
+                text=f"🏪 {item.name[:52]}", callback_data=f"admin:restaurant:{item.id}"
             )
         ]
         for item in items
     ]
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -267,7 +272,7 @@ def mailing_list_keyboard(items, page: int, has_next: bool):
     rows = [
         [
             InlineKeyboardButton(
-                text=item.name[:55], callback_data=f"mail:open:{item.id}:{page}"
+                text=f"📨 {item.name[:52]}", callback_data=f"mail:open:{item.id}:{page}"
             )
         ]
         for item in items
@@ -275,15 +280,19 @@ def mailing_list_keyboard(items, page: int, has_next: bool):
     pagination = []
     if page > 0:
         pagination.append(
-            InlineKeyboardButton(text="←", callback_data=f"admin:list:{page - 1}")
+            InlineKeyboardButton(
+                text="◀️ Предыдущая", callback_data=f"admin:list:{page - 1}"
+            )
         )
     if has_next:
         pagination.append(
-            InlineKeyboardButton(text="→", callback_data=f"admin:list:{page + 1}")
+            InlineKeyboardButton(
+                text="Следующая ▶️", callback_data=f"admin:list:{page + 1}"
+            )
         )
     if pagination:
         rows.append(pagination)
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="menu:admin")])
+    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -336,7 +345,7 @@ def mailing_actions(item_id: int, status: str, list_page: int = 0):
     rows.append(
         [
             InlineKeyboardButton(
-                text="⬅️ К списку", callback_data=f"admin:list:{list_page}"
+                text="⬅️ К списку", callback_data=f"admin:list_back:{list_page}"
             )
         ]
     )
