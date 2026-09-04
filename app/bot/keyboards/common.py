@@ -7,6 +7,15 @@ from aiogram.types import (
 )
 
 
+def restaurant_button_name(name: str) -> str:
+    normalized = name.strip().casefold()
+    if "бистро" in normalized and "рыба и гады" in normalized:
+        return "Бистро «Рыба и Гады»"
+    if normalized == "рыба и гады":
+        return "Ресторан «Рыба и Гады»"
+    return name
+
+
 def phone_keyboard():
     rows = [[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]]
     return ReplyKeyboardMarkup(
@@ -89,7 +98,7 @@ def restaurant_keyboard(
     rows = [
         [
             InlineKeyboardButton(
-                text=f"🏪 {r.name}",
+                text=restaurant_button_name(r.name),
                 **(
                     {"url": urls_by_id[r.id]}
                     if urls_by_id.get(r.id)
@@ -234,7 +243,8 @@ def admin_restaurants_keyboard(items):
     rows = [
         [
             InlineKeyboardButton(
-                text=f"🏪 {item.name[:52]}", callback_data=f"admin:restaurant:{item.id}"
+                text=restaurant_button_name(item.name)[:52],
+                callback_data=f"admin:restaurant:{item.id}",
             )
         ]
         for item in items
