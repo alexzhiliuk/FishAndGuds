@@ -21,7 +21,7 @@ class RestaurantLinkEdit(StatesGroup):
     value = State()
 
 
-class ApplicationLinkEdit(StatesGroup):
+class ApplicationDocumentEdit(StatesGroup):
     value = State()
 
 

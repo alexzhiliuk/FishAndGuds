@@ -4,6 +4,7 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, F, Router
+from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,9 +15,11 @@ from app.bot.keyboards.common import (
     admin_restaurant_links_keyboard,
     admin_restaurants_keyboard,
     back_keyboard,
+    document_edit_keyboard,
     mailing_actions,
     mailing_input_back,
     mailing_list_keyboard,
+    restaurant_link_edit_keyboard,
 )
 from app.bot.media import resolve_mailing_photo
 from app.bot.navigation import (
@@ -25,13 +28,14 @@ from app.bot.navigation import (
     clear_inline_keyboard,
 )
 from app.bot.states import (
-    ApplicationLinkEdit,
+    ApplicationDocumentEdit,
     MailingCreate,
     MailingEdit,
     MailingSchedule,
     RestaurantLinkEdit,
 )
 from app.config import Settings
+from app.repositories import UserRepository
 from app.services import (
     ApplicationSettingsService,
     MailingService,
@@ -47,9 +51,13 @@ RESTAURANT_LINK_FIELDS = {
     "reviews_url": "⭐ Отзывы / Яндекс Карты",
     "contact_phone": "📞 Телефон",
 }
-APPLICATION_LINK_FIELDS = {
-    ApplicationSettingsService.PRIVACY_POLICY_URL: "🔒 Политика обработки персональных данных",
-    ApplicationSettingsService.LOYALTY_RULES_URL: "📜 Правила программы лояльности",
+APPLICATION_DOCUMENTS = {
+    ApplicationSettingsService.PRIVACY_POLICY: "🔒 Политика обработки персональных данных",
+    ApplicationSettingsService.LOYALTY_RULES: "📜 Правила программы лояльности",
+}
+LEGACY_DOCUMENT_KEYS = {
+    "privacy_policy_url": ApplicationSettingsService.PRIVACY_POLICY,
+    "loyalty_rules_url": ApplicationSettingsService.LOYALTY_RULES,
 }
 
 
@@ -81,6 +89,29 @@ async def send_mailing_preview(
         await answer_with_buttons(message, item.text, reply_markup=reply_markup)
 
 
+@router.message(Command("removeme"))
+async def remove_me(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+):
+    if await deny(message, settings):
+        return
+    removed = await UserRepository(session).delete_by_telegram_id(message.from_user.id)
+    await state.clear()
+    await state.update_data(admin_local_registration_only=True)
+    text = (
+        "Локальный профиль удалён. Данные в iiko не изменены."
+        if removed
+        else "Локальный профиль уже отсутствует. Данные в iiko не изменены."
+    )
+    await message.answer(
+        f"{text}\n\nОтправьте /start и пройдите регистрацию заново. "
+        "Бот подключит только уже существующего гостя iiko."
+    )
+
+
 @router.message(F.text == "⚙️ Админ-панель")
 async def open_admin(message: Message, settings: Settings):
     if await deny(message, settings):
@@ -110,11 +141,13 @@ async def admin_back(callback: CallbackQuery, settings: Settings):
     await callback.answer()
 
 
-def legal_admin_text(values: dict[str, str | None]) -> str:
+def legal_admin_text(documents: dict) -> str:
     lines = ["📄 Документы регистрации", ""]
-    for key, label in APPLICATION_LINK_FIELDS.items():
-        lines.append(f"{label}:\n{values.get(key) or 'не задана'}\n")
-    lines.append("Ссылки открываются в анкете Mini App и хранятся в нашей БД.")
+    for key, label in APPLICATION_DOCUMENTS.items():
+        document = documents.get(key)
+        status = f"загружен файл {document.file_name}" if document else "не загружен"
+        lines.append(f"{label}:\n{status}\n")
+    lines.append("PDF-файлы отправляются пользователям через бота и доступны в анкете.")
     return "\n".join(lines)
 
 
@@ -129,59 +162,93 @@ async def admin_legal(
         return
     await callback.answer()
     await state.clear()
-    values = await ApplicationSettingsService(session).registration_links()
+    documents = await ApplicationSettingsService(session).registration_documents()
     await answer_with_buttons(
         callback.message,
-        legal_admin_text(values),
+        legal_admin_text(documents),
         reply_markup=admin_legal_links_keyboard(),
     )
 
 
+@router.callback_query(F.data.startswith("legal_document:clear:"))
+async def legal_document_clear(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+):
+    if await deny(callback, settings):
+        return
+    key = callback.data.rsplit(":", 1)[1]
+    if key not in APPLICATION_DOCUMENTS:
+        await callback.answer("Неизвестный документ", show_alert=True)
+        return
+    await ApplicationSettingsService(session).clear_document(key)
+    await state.clear()
+    documents = await ApplicationSettingsService(session).registration_documents()
+    await callback.answer("Файл удалён")
+    await answer_with_buttons(
+        callback.message,
+        legal_admin_text(documents),
+        reply_markup=admin_legal_links_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("legal_document:"))
 @router.callback_query(F.data.startswith("legal_link:"))
-async def legal_link_start(
+async def legal_document_start(
     callback: CallbackQuery, state: FSMContext, settings: Settings
 ):
     if await deny(callback, settings):
         return
     key = callback.data.split(":", 1)[1]
-    if key not in APPLICATION_LINK_FIELDS:
-        await callback.answer("Неизвестная настройка", show_alert=True)
+    key = LEGACY_DOCUMENT_KEYS.get(key, key)
+    if key not in APPLICATION_DOCUMENTS:
+        await callback.answer("Неизвестный документ", show_alert=True)
         return
     await callback.answer()
-    await state.update_data(application_link_key=key)
-    await state.set_state(ApplicationLinkEdit.value)
+    await state.update_data(application_document_key=key)
+    await state.set_state(ApplicationDocumentEdit.value)
     await answer_with_buttons(
         callback.message,
-        f"Отправьте HTTPS-ссылку для раздела «{APPLICATION_LINK_FIELDS[key]}».\n\n"
-        "Чтобы очистить поле, напишите «удалить».",
-        reply_markup=back_keyboard("admin:legal"),
+        f"Отправьте PDF-файл для раздела «{APPLICATION_DOCUMENTS[key]}».",
+        reply_markup=document_edit_keyboard(key),
     )
 
 
-@router.message(ApplicationLinkEdit.value)
-async def legal_link_value(message: Message, state: FSMContext, session: AsyncSession):
-    raw_value = (message.text or "").strip()
-    if raw_value.lower() in {"удалить", "очистить", "нет", "-"}:
-        value = None
-    else:
-        parsed = urlparse(raw_value)
-        if len(raw_value) > 1000 or parsed.scheme != "https" or not parsed.netloc:
-            await answer_with_buttons(
-                message,
-                "Некорректная ссылка. Отправьте полный HTTPS-адрес или напишите «удалить».",
-                reply_markup=back_keyboard("admin:legal"),
-            )
-            return
-        value = raw_value
+@router.message(ApplicationDocumentEdit.value)
+async def legal_document_value(
+    message: Message,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+):
+    if await deny(message, settings):
+        return
     data = await state.get_data()
-    await ApplicationSettingsService(session).update_link(
-        data["application_link_key"], value
+    key = data["application_document_key"]
+    document = message.document
+    file_name = document.file_name if document else None
+    if (
+        document is None
+        or document.mime_type != "application/pdf"
+        or not file_name
+        or not file_name.lower().endswith(".pdf")
+    ):
+        await answer_with_buttons(
+            message,
+            "Нужен файл в формате PDF.",
+            reply_markup=document_edit_keyboard(key),
+        )
+        return
+    await ApplicationSettingsService(session).update_document(
+        key, document.file_id, file_name
     )
-    values = await ApplicationSettingsService(session).registration_links()
+    documents = await ApplicationSettingsService(session).registration_documents()
     await state.clear()
     await answer_with_buttons(
         message,
-        "Ссылка сохранена.\n\n" + legal_admin_text(values),
+        "PDF-файл сохранён.\n\n" + legal_admin_text(documents),
         reply_markup=admin_legal_links_keyboard(),
     )
 
@@ -248,6 +315,38 @@ async def admin_restaurant(
     )
 
 
+@router.callback_query(F.data.startswith("restaurant_link:clear:"))
+async def restaurant_link_clear(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+):
+    if await deny(callback, settings):
+        return
+    _, _, field, item_id = callback.data.split(":")
+    if field not in RESTAURANT_LINK_FIELDS:
+        await callback.answer("Неизвестное поле", show_alert=True)
+        return
+    if field == "delivery_url":
+        restaurant = await RestaurantService(session).get(int(item_id))
+        if restaurant is None or not restaurant.delivery_configurable:
+            await callback.answer(
+                "Доставка настраивается только для ресторана", show_alert=True
+            )
+            return
+    item = await RestaurantService(session).update_local_link(int(item_id), field, None)
+    await state.clear()
+    await callback.answer("Поле очищено")
+    await answer_with_buttons(
+        callback.message,
+        restaurant_admin_text(item),
+        reply_markup=admin_restaurant_links_keyboard(
+            item.id, allow_delivery=item.delivery_configurable
+        ),
+    )
+
+
 @router.callback_query(F.data.startswith("restaurant_link:"))
 async def restaurant_link_start(
     callback: CallbackQuery,
@@ -272,20 +371,16 @@ async def restaurant_link_start(
     await state.update_data(restaurant_id=int(item_id), restaurant_link_field=field)
     await state.set_state(RestaurantLinkEdit.value)
     if field == "contact_phone":
-        instruction = (
-            f"Отправьте номер для раздела «{RESTAURANT_LINK_FIELDS[field]}».\n\n"
-            "Чтобы очистить поле, напишите «удалить»."
-        )
+        instruction = f"Отправьте номер для раздела «{RESTAURANT_LINK_FIELDS[field]}»."
     else:
         instruction = (
             f"Отправьте ссылку для раздела «{RESTAURANT_LINK_FIELDS[field]}».\n\n"
-            "Разрешены ссылки http:// и https://. Чтобы очистить поле, "
-            "напишите «удалить»."
+            "Разрешены ссылки http:// и https://."
         )
     await answer_with_buttons(
         callback.message,
         instruction,
-        reply_markup=back_keyboard(f"admin:restaurant:{item_id}"),
+        reply_markup=restaurant_link_edit_keyboard(field, int(item_id)),
     )
 
 
@@ -304,9 +399,10 @@ async def restaurant_link_value(
         except ValueError:
             await answer_with_buttons(
                 message,
-                "Некорректный номер телефона. Отправьте номер с кодом страны "
-                "или напишите «удалить».",
-                reply_markup=back_keyboard(f"admin:restaurant:{data['restaurant_id']}"),
+                "Некорректный номер телефона. Отправьте номер с кодом страны.",
+                reply_markup=restaurant_link_edit_keyboard(
+                    field, data["restaurant_id"]
+                ),
             )
             return
     else:
@@ -318,8 +414,10 @@ async def restaurant_link_value(
         ):
             await answer_with_buttons(
                 message,
-                "Некорректная ссылка. Отправьте полный адрес, начинающийся с https://, или напишите «удалить».",
-                reply_markup=back_keyboard(f"admin:restaurant:{data['restaurant_id']}"),
+                "Некорректная ссылка. Отправьте полный адрес, начинающийся с https://.",
+                reply_markup=restaurant_link_edit_keyboard(
+                    field, data["restaurant_id"]
+                ),
             )
             return
         value = raw_value

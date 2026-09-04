@@ -6,7 +6,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import ValidationError
 
 from app.cache import RedisJsonCache
@@ -44,15 +44,52 @@ def create_api(
         @api.get("/registration/config", include_in_schema=False)
         async def registration_config():
             async with session_factory() as session:
-                links = await ApplicationSettingsService(session).registration_links()
+                documents = await ApplicationSettingsService(
+                    session
+                ).registration_documents()
             return {
-                "privacy_policy_url": links[
-                    ApplicationSettingsService.PRIVACY_POLICY_URL
-                ],
-                "loyalty_rules_url": links[
-                    ApplicationSettingsService.LOYALTY_RULES_URL
-                ],
+                "privacy_policy_url": (
+                    "/registration/documents/privacy_policy"
+                    if documents[ApplicationSettingsService.PRIVACY_POLICY]
+                    else None
+                ),
+                "loyalty_rules_url": (
+                    "/registration/documents/loyalty_rules"
+                    if documents[ApplicationSettingsService.LOYALTY_RULES]
+                    else None
+                ),
             }
+
+        if bot is not None:
+
+            @api.get(
+                "/registration/documents/{document_key}",
+                include_in_schema=False,
+            )
+            async def registration_document(document_key: str):
+                if document_key not in ApplicationSettingsService.DOCUMENT_KEYS:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+                async with session_factory() as session:
+                    document = await ApplicationSettingsService(session).get_document(
+                        document_key
+                    )
+                if document is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+                try:
+                    content = await bot.download(document.file_id)
+                except TelegramBadRequest as exc:
+                    logger.warning(
+                        "Registration PDF is unavailable document=%s", document_key
+                    )
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND) from exc
+                if content is None:
+                    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+                content.seek(0)
+                return StreamingResponse(
+                    content,
+                    media_type="application/pdf",
+                    headers={"Content-Disposition": "inline"},
+                )
 
     if cache is not None:
 

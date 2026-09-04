@@ -7,13 +7,8 @@ from aiogram.types import (
 )
 
 
-def phone_keyboard(policy_url: str | None = None):
-    rows = []
-    if policy_url:
-        rows.append(
-            [KeyboardButton(text="Политика", web_app=WebAppInfo(url=policy_url))]
-        )
-    rows.append([KeyboardButton(text="📱 Поделиться номером", request_contact=True)])
+def phone_keyboard():
+    rows = [[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]]
     return ReplyKeyboardMarkup(
         keyboard=rows,
         resize_keyboard=True,
@@ -31,7 +26,7 @@ def registration_web_app_keyboard(url: str):
     )
 
 
-def main_menu(is_admin: bool = False):
+def main_menu(is_admin: bool = False, delivery_url: str | None = None):
     rows = [
         [
             InlineKeyboardButton(text="🔲 Мой QR-код", callback_data="menu:qr"),
@@ -44,7 +39,12 @@ def main_menu(is_admin: bool = False):
                 text="🍽 Забронировать стол", callback_data="menu:booking"
             ),
             InlineKeyboardButton(
-                text="🛵 Заказать доставку", callback_data="menu:delivery"
+                text="🛵 Заказать доставку",
+                **(
+                    {"url": delivery_url}
+                    if delivery_url
+                    else {"callback_data": "menu:delivery"}
+                ),
             ),
         ],
         [
@@ -82,16 +82,6 @@ def profile_keyboard():
     )
 
 
-def loyalty_terms_keyboard(rules_url: str | None):
-    rows = []
-    if rules_url:
-        rows.append(
-            [InlineKeyboardButton(text="📜 Ознакомиться с условиями", url=rules_url)]
-        )
-    rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:profile")])
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def restaurant_keyboard(
     restaurants, action: str, urls_by_id: dict[int, str | None] | None = None
 ):
@@ -113,12 +103,19 @@ def restaurant_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def action_keyboard(label: str, url: str | None, action: str):
+def action_keyboard(
+    label: str, url: str | None, action: str, back_callback: str | None = None
+):
     rows = []
     if url:
         rows.append([InlineKeyboardButton(text=label, url=url)])
     rows.append(
-        [InlineKeyboardButton(text="⬅️ Назад", callback_data=f"restaurants:{action}")]
+        [
+            InlineKeyboardButton(
+                text="⬅️ Назад",
+                callback_data=back_callback or f"restaurants:{action}",
+            )
+        ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -127,6 +124,37 @@ def back_keyboard(callback_data: str):
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="⬅️ Назад", callback_data=callback_data)]
+        ]
+    )
+
+
+def document_edit_keyboard(key: str):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Очистить", callback_data=f"legal_document:clear:{key}"
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:legal")],
+        ]
+    )
+
+
+def restaurant_link_edit_keyboard(field: str, item_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Очистить",
+                    callback_data=f"restaurant_link:clear:{field}:{item_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад", callback_data=f"admin:restaurant:{item_id}"
+                )
+            ],
         ]
     )
 
@@ -188,13 +216,13 @@ def admin_legal_links_keyboard():
             [
                 InlineKeyboardButton(
                     text="🔒 Политика обработки данных",
-                    callback_data="legal_link:privacy_policy_url",
+                    callback_data="legal_document:privacy_policy",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text="📜 Правила программы лояльности",
-                    callback_data="legal_link:loyalty_rules_url",
+                    callback_data="legal_document:loyalty_rules",
                 )
             ],
             [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")],

@@ -6,6 +6,7 @@ from app.services.core import (
     PurchaseService,
     RestaurantService,
     SyncService,
+    RegistrationDocument,
 )
 from app.services.iiko import (
     CardService,
@@ -22,6 +23,7 @@ from app.services.registration import (
 
 __all__ = [
     "ApplicationSettingsService",
+    "RegistrationDocument",
     "LoyaltyService",
     "PurchaseService",
     "RestaurantService",

@@ -1,5 +1,5 @@
 from app.bot.states.admin import (
-    ApplicationLinkEdit as ApplicationLinkEdit,
+    ApplicationDocumentEdit as ApplicationDocumentEdit,
     MailingCreate as MailingCreate,
     MailingEdit as MailingEdit,
     MailingSchedule as MailingSchedule,

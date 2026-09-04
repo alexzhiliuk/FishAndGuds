@@ -14,15 +14,16 @@ from app.bot.keyboards.common import (
     admin_menu,
     admin_restaurant_links_keyboard,
     admin_restaurants_keyboard,
+    document_edit_keyboard,
     main_menu,
     mailing_actions,
     mailing_input_back,
     mailing_list_keyboard,
-    loyalty_terms_keyboard,
     phone_keyboard,
     profile_keyboard,
     purchases_keyboard,
     restaurant_keyboard,
+    restaurant_link_edit_keyboard,
 )
 from app.bot.navigation import clear_inline_keyboard
 
@@ -34,6 +35,91 @@ def callback_data(markup):
         for button in row
         if button.callback_data
     ]
+
+
+@pytest.mark.asyncio
+async def test_removeme_deletes_only_admin_local_profile(monkeypatch):
+    repository = SimpleNamespace(delete_by_telegram_id=AsyncMock(return_value=True))
+    monkeypatch.setattr(admin_handlers, "UserRepository", lambda session: repository)
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock(), update_data=AsyncMock())
+
+    await admin_handlers.remove_me(
+        message,
+        state,
+        object(),
+        SimpleNamespace(admin_ids=(42,)),
+    )
+
+    repository.delete_by_telegram_id.assert_awaited_once_with(42)
+    state.clear.assert_awaited_once_with()
+    state.update_data.assert_awaited_once_with(admin_local_registration_only=True)
+    assert "Данные в iiko не изменены" in message.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_removeme_is_denied_for_non_admin(monkeypatch):
+    repository_factory = AsyncMock()
+    monkeypatch.setattr(admin_handlers, "UserRepository", repository_factory)
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=41),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock(), update_data=AsyncMock())
+
+    await admin_handlers.remove_me(
+        message,
+        state,
+        object(),
+        SimpleNamespace(admin_ids=(42,)),
+    )
+
+    repository_factory.assert_not_called()
+    state.clear.assert_not_awaited()
+    message.answer.assert_awaited_once_with("Доступ запрещён")
+
+
+@pytest.mark.asyncio
+async def test_admin_local_registration_never_creates_missing_iiko_customer(
+    monkeypatch,
+):
+    service = SimpleNamespace(
+        start=AsyncMock(
+            return_value=SimpleNamespace(
+                user=None,
+                needs_form=True,
+                iiko_available=True,
+            )
+        )
+    )
+    monkeypatch.setattr(
+        user_handlers, "registration_service", lambda session, iiko, settings: service
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        contact=SimpleNamespace(user_id=42, phone_number="+375291111111"),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(
+        get_data=AsyncMock(return_value={"admin_local_registration_only": True}),
+        clear=AsyncMock(),
+        update_data=AsyncMock(),
+        set_state=AsyncMock(),
+    )
+
+    await user_handlers.register(
+        message,
+        state,
+        object(),
+        object(),
+        SimpleNamespace(admin_ids=(42,)),
+    )
+
+    assert "Локальный профиль не создан" in message.answer.await_args.args[0]
+    state.set_state.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -117,12 +203,21 @@ def test_main_menu_is_inline_and_uses_callback_navigation():
     assert markup.inline_keyboard[1][0].text == "🍽 Забронировать стол"
 
 
-def test_phone_keyboard_opens_policy_before_requesting_contact():
-    markup = phone_keyboard("https://example.com/privacy.pdf")
+def test_main_menu_delivery_opens_configured_url_directly():
+    markup = main_menu(
+        is_admin=False, delivery_url="https://eda.yandex.ru/restaurant/fish"
+    )
 
-    assert markup.keyboard[0][0].text == "Политика"
-    assert markup.keyboard[0][0].web_app.url == "https://example.com/privacy.pdf"
-    assert markup.keyboard[1][0].request_contact is True
+    delivery = markup.inline_keyboard[1][1]
+    assert delivery.url == "https://eda.yandex.ru/restaurant/fish"
+    assert delivery.callback_data is None
+
+
+def test_phone_keyboard_only_requests_contact():
+    markup = phone_keyboard()
+
+    assert len(markup.keyboard) == 1
+    assert markup.keyboard[0][0].request_contact is True
 
 
 @pytest.mark.asyncio
@@ -130,33 +225,39 @@ async def test_registration_prompt_includes_consent_and_configured_policy(
     monkeypatch, tmp_path
 ):
     class FakeApplicationSettingsService:
-        PRIVACY_POLICY_URL = "privacy_policy_url"
+        PRIVACY_POLICY = "privacy_policy"
 
         def __init__(self, session):
             pass
 
-        async def registration_links(self):
-            return {self.PRIVACY_POLICY_URL: "https://example.com/privacy.pdf"}
+        async def get_document(self, key):
+            return SimpleNamespace(file_id="privacy-file-id", file_name="privacy.pdf")
 
     send_visual = AsyncMock()
     monkeypatch.setattr(
         user_handlers, "ApplicationSettingsService", FakeApplicationSettingsService
     )
     monkeypatch.setattr(user_handlers, "send_visual", send_visual)
-    settings = SimpleNamespace(
-        assets_dir=tmp_path,
-        privacy_policy_url="https://fallback.example.com/privacy",
-    )
+    settings = SimpleNamespace(assets_dir=tmp_path)
 
-    await user_handlers.send_registration_prompt(
-        SimpleNamespace(), settings, session=object()
-    )
+    message = SimpleNamespace(answer_document=AsyncMock())
+    await user_handlers.send_registration_prompt(message, settings, session=object())
 
     text = send_visual.await_args.args[2]
-    markup = send_visual.await_args.kwargs["reply_markup"]
+    assert "Добро пожаловать в клуб гедонистических привилегий" in text
     assert "Отправляя данные, вы соглашаетесь" in text
-    assert markup.keyboard[0][0].text == "Политика"
-    assert markup.keyboard[0][0].web_app.url == "https://example.com/privacy.pdf"
+    assert "reply_markup" not in send_visual.await_args.kwargs
+    assert send_visual.await_args.kwargs["parse_mode"] == "HTML"
+    message.answer_document.assert_awaited_once_with(
+        "privacy-file-id",
+        caption="Политика обработки персональных данных",
+        reply_markup=message.answer_document.await_args.kwargs["reply_markup"],
+    )
+    assert (
+        message.answer_document.await_args.kwargs["reply_markup"]
+        .keyboard[0][0]
+        .request_contact
+    )
 
 
 @pytest.mark.asyncio
@@ -175,15 +276,17 @@ async def test_found_card_is_confirmed_once_with_main_menu(monkeypatch):
         answer=AsyncMock(),
     )
 
+    state = SimpleNamespace(clear=AsyncMock())
     await user_handlers.register(
         message,
-        state=SimpleNamespace(),
+        state=state,
         session=object(),
         iiko=object(),
         settings=SimpleNamespace(),
     )
 
     message.answer.assert_not_awaited()
+    state.clear.assert_awaited_once_with()
     send_main_menu.assert_awaited_once()
     assert send_main_menu.await_args.kwargs["text"] == user_handlers.CONNECTED_TEXT
 
@@ -199,10 +302,11 @@ async def test_registered_start_opens_menu_without_intermediate_message(monkeypa
     message = SimpleNamespace(from_user=SimpleNamespace(id=42), answer=AsyncMock())
     settings = SimpleNamespace()
 
-    await user_handlers.start(message, object(), settings, object())
+    session = object()
+    await user_handlers.start(message, session, settings, object())
 
     message.answer.assert_not_awaited()
-    send_main_menu.assert_awaited_once_with(message, 42, settings)
+    send_main_menu.assert_awaited_once_with(message, 42, settings, session)
 
 
 @pytest.mark.asyncio
@@ -325,12 +429,117 @@ def test_admin_menu_does_not_expose_users_button():
     ]
 
 
-def test_admin_can_edit_registration_document_links():
+def test_admin_can_upload_registration_documents():
     assert callback_data(admin_legal_links_keyboard()) == [
-        "legal_link:privacy_policy_url",
-        "legal_link:loyalty_rules_url",
+        "legal_document:privacy_policy",
+        "legal_document:loyalty_rules",
         "admin:back",
     ]
+
+
+def test_admin_document_and_restaurant_fields_have_clear_buttons():
+    assert callback_data(document_edit_keyboard("privacy_policy")) == [
+        "legal_document:clear:privacy_policy",
+        "admin:legal",
+    ]
+    assert callback_data(restaurant_link_edit_keyboard("delivery_url", 5)) == [
+        "restaurant_link:clear:delivery_url:5",
+        "admin:restaurant:5",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_admin_uploads_pdf_document(monkeypatch):
+    stored = SimpleNamespace(file_id="policy-id", file_name="policy.pdf")
+    service = SimpleNamespace(
+        update_document=AsyncMock(return_value=stored),
+        registration_documents=AsyncMock(
+            return_value={"privacy_policy": stored, "loyalty_rules": None}
+        ),
+    )
+    monkeypatch.setattr(
+        admin_handlers, "ApplicationSettingsService", lambda session: service
+    )
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=42),
+        document=SimpleNamespace(
+            file_id="policy-id",
+            file_name="policy.pdf",
+            mime_type="application/pdf",
+        ),
+        reply_markup=None,
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(
+        get_data=AsyncMock(return_value={"application_document_key": "privacy_policy"}),
+        clear=AsyncMock(),
+    )
+
+    await admin_handlers.legal_document_value(
+        message, state, object(), SimpleNamespace(admin_ids=(42,))
+    )
+
+    service.update_document.assert_awaited_once_with(
+        "privacy_policy", "policy-id", "policy.pdf"
+    )
+    state.clear.assert_awaited_once_with()
+    assert "PDF-файл сохранён" in message.answer.await_args.args[0]
+
+
+@pytest.mark.asyncio
+async def test_admin_clears_pdf_with_button(monkeypatch):
+    service = SimpleNamespace(
+        clear_document=AsyncMock(),
+        registration_documents=AsyncMock(
+            return_value={"privacy_policy": None, "loyalty_rules": None}
+        ),
+    )
+    monkeypatch.setattr(
+        admin_handlers, "ApplicationSettingsService", lambda session: service
+    )
+    callback = SimpleNamespace(
+        data="legal_document:clear:privacy_policy",
+        from_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(reply_markup=None, answer=AsyncMock()),
+        answer=AsyncMock(),
+    )
+    state = SimpleNamespace(clear=AsyncMock())
+
+    await admin_handlers.legal_document_clear(
+        callback, state, object(), SimpleNamespace(admin_ids=(42,))
+    )
+
+    service.clear_document.assert_awaited_once_with("privacy_policy")
+    callback.answer.assert_awaited_once_with("Файл удалён")
+
+
+@pytest.mark.asyncio
+async def test_policy_button_sends_same_admin_pdf(monkeypatch):
+    document = SimpleNamespace(file_id="policy-id", file_name="policy.pdf")
+
+    class FakeApplicationSettingsService:
+        PRIVACY_POLICY = "privacy_policy"
+
+        def __init__(self, session):
+            pass
+
+        async def get_document(self, key):
+            return document
+
+    monkeypatch.setattr(
+        user_handlers, "ApplicationSettingsService", FakeApplicationSettingsService
+    )
+    message = SimpleNamespace(answer_document=AsyncMock())
+
+    await user_handlers.privacy_policy(message, object())
+
+    message.answer_document.assert_awaited_once()
+    assert message.answer_document.await_args.args[0] == "policy-id"
+    assert (
+        message.answer_document.await_args.kwargs["reply_markup"]
+        .keyboard[0][0]
+        .request_contact
+    )
 
 
 def test_admin_can_select_restaurant_and_each_local_link():
@@ -538,51 +747,37 @@ def test_profile_has_no_user_notification_settings():
     assert "purchases:back" in callback_data(purchases_keyboard(page=0, has_next=False))
 
 
-def test_loyalty_terms_keyboard_uses_admin_configured_rules_url_only():
-    markup = loyalty_terms_keyboard("https://example.com/loyalty-rules")
-
-    assert markup.inline_keyboard[0][0].url == "https://example.com/loyalty-rules"
-    assert callback_data(markup) == ["nav:profile"]
-
-
 @pytest.mark.asyncio
-async def test_profile_terms_explains_that_rules_are_available_by_link(monkeypatch):
+async def test_profile_terms_sends_admin_pdf(monkeypatch):
     class FakeApplicationSettingsService:
-        PRIVACY_POLICY_URL = "privacy_policy_url"
-        LOYALTY_RULES_URL = "loyalty_rules_url"
+        LOYALTY_RULES = "loyalty_rules"
 
         def __init__(self, session):
             pass
 
-        async def registration_links(self):
-            return {
-                self.PRIVACY_POLICY_URL: "https://example.com/privacy",
-                self.LOYALTY_RULES_URL: "https://example.com/rules",
-            }
+        async def get_document(self, key):
+            return SimpleNamespace(file_id="rules-file-id", file_name="rules.pdf")
 
     monkeypatch.setattr(
         user_handlers, "ApplicationSettingsService", FakeApplicationSettingsService
     )
     callback = SimpleNamespace(
-        message=SimpleNamespace(answer=AsyncMock()), answer=AsyncMock()
+        message=SimpleNamespace(answer_document=AsyncMock()), answer=AsyncMock()
     )
 
     await user_handlers.terms(callback, session=object())
 
-    text = callback.message.answer.await_args.args[0]
-    markup = callback.message.answer.await_args.kwargs["reply_markup"]
-    assert "Ознакомиться с условиями программы лояльности можно по ссылке ниже" in text
-    assert "https://example.com/rules" in text
-    assert markup.inline_keyboard[0][0].url == "https://example.com/rules"
-    assert all(
-        button.url != "https://example.com/privacy"
-        for row in markup.inline_keyboard
-        for button in row
+    callback.message.answer_document.assert_awaited_once()
+    assert callback.message.answer_document.await_args.args[0] == "rules-file-id"
+    assert callback.message.answer_document.await_args.kwargs["caption"].startswith(
+        "📜 Правила"
     )
 
 
 @pytest.mark.asyncio
-async def test_profile_back_sends_main_menu_as_new_message():
+async def test_profile_back_sends_main_menu_as_new_message(monkeypatch):
+    service = SimpleNamespace(delivery_url=AsyncMock(return_value=None))
+    monkeypatch.setattr(user_handlers, "RestaurantService", lambda session: service)
     message = SimpleNamespace(photo=None, edit_text=AsyncMock(), answer=AsyncMock())
     callback = SimpleNamespace(
         from_user=SimpleNamespace(id=42),
@@ -593,7 +788,7 @@ async def test_profile_back_sends_main_menu_as_new_message():
         admin_ids=(), booking_url=None, delivery_url=None, reviews_url=None
     )
 
-    await user_handlers.profile_to_main(callback, settings)
+    await user_handlers.profile_to_main(callback, settings, object())
 
     message.answer.assert_awaited_once()
     assert message.answer.await_args.args[0] == user_handlers.MENU_ONLY_TEXT
@@ -771,6 +966,10 @@ async def test_registered_user_unknown_text_returns_main_menu(monkeypatch):
     )
     monkeypatch.setattr(
         user_handlers, "registration_service", lambda session, iiko, settings: service
+    )
+    restaurant_service = SimpleNamespace(delivery_url=AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        user_handlers, "RestaurantService", lambda session: restaurant_service
     )
 
     await user_handlers.fallback(
