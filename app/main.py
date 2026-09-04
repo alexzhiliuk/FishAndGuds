@@ -5,6 +5,7 @@ from urllib.parse import urlparse
 
 import uvicorn
 from aiogram import Bot, Dispatcher
+from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.storage.redis import RedisEventIsolation, RedisStorage
 from redis.asyncio import Redis
 
@@ -120,6 +121,10 @@ async def main():
         )
         api_task = asyncio.create_task(server.serve())
         await wait_until_server_started(server, api_task)
+        try:
+            await bot.set_my_name(name=settings.bot_display_name)
+        except TelegramAPIError:
+            logging.exception("Could not update Telegram bot display name")
         await bot.set_webhook(
             url=settings.telegram_webhook_url,
             secret_token=settings.telegram_webhook_secret,

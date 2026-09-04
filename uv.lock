@@ -263,7 +263,6 @@ dependencies = [
     { name = "fastapi" },
     { name = "greenlet" },
     { name = "httpx" },
-    { name = "pre-commit" },
     { name = "pydantic-settings" },
     { name = "qrcode", extra = ["pil"] },
     { name = "redis" },
@@ -273,6 +272,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
 ]
@@ -287,7 +287,6 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
     { name = "greenlet", specifier = ">=3.1,<4" },
     { name = "httpx", specifier = ">=0.28,<1" },
-    { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pydantic-settings", specifier = ">=2.7,<3" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.0,<9" },
     { name = "redis", specifier = ">=5,<8" },
@@ -297,6 +296,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "pre-commit", specifier = ">=4.6.2" },
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", specifier = ">=0.25,<1" },
 ]

@@ -7,9 +7,15 @@ from aiogram.types import (
 )
 
 
-def phone_keyboard():
+def phone_keyboard(policy_url: str | None = None):
+    rows = []
+    if policy_url:
+        rows.append(
+            [KeyboardButton(text="Политика", web_app=WebAppInfo(url=policy_url))]
+        )
+    rows.append([KeyboardButton(text="📱 Поделиться номером", request_contact=True)])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -28,13 +34,15 @@ def registration_web_app_keyboard(url: str):
 def main_menu(is_admin: bool = False):
     rows = [
         [
-            InlineKeyboardButton(text="🔳 QR-код", callback_data="menu:qr"),
+            InlineKeyboardButton(text="🔲 Мой QR-код", callback_data="menu:qr"),
             InlineKeyboardButton(
                 text="👤 Личный кабинет", callback_data="menu:profile"
             ),
         ],
         [
-            InlineKeyboardButton(text="🍽 Забронировать", callback_data="menu:booking"),
+            InlineKeyboardButton(
+                text="🍽 Забронировать стол", callback_data="menu:booking"
+            ),
             InlineKeyboardButton(
                 text="🛵 Заказать доставку", callback_data="menu:delivery"
             ),
@@ -60,12 +68,9 @@ def profile_keyboard():
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="🔳 Показать QR", callback_data="profile:qr"),
-                InlineKeyboardButton(text="🧾 Покупки", callback_data="purchases:0"),
-            ],
-            [
                 InlineKeyboardButton(
-                    text="🔔 Уведомления", callback_data="notifications:show"
-                )
+                    text="🧾 История покупок", callback_data="purchases:0"
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -87,53 +92,19 @@ def loyalty_terms_keyboard(rules_url: str | None):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def notifications_keyboard(settings):
-    def mark(value):
-        return "✅" if value else "❌"
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"Акции {mark(settings.promotions_enabled)}",
-                    callback_data="notify:promotions",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Новости {mark(settings.news_enabled)}",
-                    callback_data="notify:news",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Праздники {mark(settings.holidays_enabled)}",
-                    callback_data="notify:holidays",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"СМС {mark(settings.sms_enabled)}", callback_data="notify:sms"
-                ),
-                InlineKeyboardButton(
-                    text=f"PUSH {mark(settings.push_enabled)}",
-                    callback_data="notify:push",
-                ),
-                InlineKeyboardButton(
-                    text=f"E-mail {mark(settings.email_enabled)}",
-                    callback_data="notify:email",
-                ),
-            ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:profile")],
-        ]
-    )
-
-
-def restaurant_keyboard(restaurants, action: str):
+def restaurant_keyboard(
+    restaurants, action: str, urls_by_id: dict[int, str | None] | None = None
+):
+    urls_by_id = urls_by_id or {}
     rows = [
         [
             InlineKeyboardButton(
-                text=f"🏪 {r.name}", callback_data=f"restaurant:{action}:{r.id}"
+                text=f"🏪 {r.name}",
+                **(
+                    {"url": urls_by_id[r.id]}
+                    if urls_by_id.get(r.id)
+                    else {"callback_data": f"restaurant:{action}:{r.id}"}
+                ),
             )
         ]
         for r in restaurants
@@ -244,19 +215,36 @@ def admin_restaurants_keyboard(items):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_restaurant_links_keyboard(item_id: int):
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def admin_restaurant_links_keyboard(item_id: int, *, allow_delivery: bool = True):
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="🍽 Бронирование (резерв)",
+                callback_data=f"restaurant_link:booking_url:{item_id}",
+            )
+        ],
+    ]
+    if allow_delivery:
+        rows.append(
             [
                 InlineKeyboardButton(
                     text="🛵 Доставка",
                     callback_data=f"restaurant_link:delivery_url:{item_id}",
                 )
-            ],
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text="⭐ Отзывы / Яндекс Карты",
                     callback_data=f"restaurant_link:reviews_url:{item_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📞 Телефон",
+                    callback_data=f"restaurant_link:contact_phone:{item_id}",
                 )
             ],
             [
@@ -266,6 +254,7 @@ def admin_restaurant_links_keyboard(item_id: int):
             ],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def mailing_list_keyboard(items, page: int, has_next: bool):
