@@ -1,7 +1,13 @@
+from contextlib import asynccontextmanager
+from io import BytesIO
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 
 from app.api.app import create_api
+from app.services import ApplicationSettingsService
 
 
 @pytest.mark.asyncio
@@ -37,6 +43,36 @@ async def test_registration_page_is_served():
     assert 'aria-label="Год"' in response.text
     assert '<button id="submit" type="submit">' in response.text
     assert '<span class="required-star">*</span>' in response.text
+
+
+@pytest.mark.asyncio
+async def test_registration_uses_same_admin_pdf_documents(session):
+    service = ApplicationSettingsService(session)
+    await service.update_document(
+        service.PRIVACY_POLICY, "privacy-file-id", "privacy.pdf"
+    )
+
+    @asynccontextmanager
+    async def session_factory():
+        yield session
+
+    bot = SimpleNamespace(
+        download=AsyncMock(return_value=BytesIO(b"%PDF-1.4 test policy"))
+    )
+    app = create_api(bot=bot, session_factory=session_factory)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        config = await client.get("/registration/config")
+        document = await client.get("/registration/documents/privacy_policy")
+
+    assert config.json() == {
+        "privacy_policy_url": "/registration/documents/privacy_policy",
+        "loyalty_rules_url": None,
+    }
+    assert document.status_code == 200
+    assert document.headers["content-type"] == "application/pdf"
+    assert document.content.startswith(b"%PDF-")
+    bot.download.assert_awaited_once_with("privacy-file-id")
 
 
 class DispatcherStub:

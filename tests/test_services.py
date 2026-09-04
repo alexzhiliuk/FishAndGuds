@@ -6,7 +6,7 @@ from sqlalchemy import func, select
 
 from app.integrations.iiko.dto import LoyaltyTransaction as IikoLoyaltyTransaction
 from app.models import LoyaltyTransaction, NotificationSettings, Purchase, User
-from app.repositories import MailingRepository
+from app.repositories import MailingRepository, UserRepository
 from app.services import (
     ApplicationSettingsService,
     LoyaltyService,
@@ -54,14 +54,19 @@ def test_mini_app_registration_submission_validation():
 
 
 @pytest.mark.asyncio
-async def test_registration_document_links_are_stored_in_database(session):
+async def test_registration_documents_are_stored_and_cleared_in_database(session):
     service = ApplicationSettingsService(session)
-    await service.update_link(service.PRIVACY_POLICY_URL, "https://example.com/privacy")
-    await service.update_link(service.LOYALTY_RULES_URL, "https://example.com/rules")
-    assert await service.registration_links() == {
-        service.PRIVACY_POLICY_URL: "https://example.com/privacy",
-        service.LOYALTY_RULES_URL: "https://example.com/rules",
-    }
+    await service.update_document(
+        service.PRIVACY_POLICY, "privacy-file-id", "privacy.pdf"
+    )
+    documents = await service.registration_documents()
+
+    assert documents[service.PRIVACY_POLICY].file_id == "privacy-file-id"
+    assert documents[service.PRIVACY_POLICY].file_name == "privacy.pdf"
+    assert documents[service.LOYALTY_RULES] is None
+
+    await service.clear_document(service.PRIVACY_POLICY)
+    assert await service.get_document(service.PRIVACY_POLICY) is None
 
 
 def registration(session, client):
@@ -77,6 +82,25 @@ async def test_existing_iiko_customer_is_registered_with_balance_and_card(sessio
     assert result.user.phone == "+375291234567"
     assert result.user.loyalty_account.card_number
     assert result.user.loyalty_account.last_known_balance == Decimal("300")
+
+
+@pytest.mark.asyncio
+async def test_admin_local_profile_can_be_removed_and_relinked_without_iiko_creation(
+    session,
+):
+    phone = "+375291234567"
+    client = IikoTestDouble(default_organization_id=ORG)
+    first = await registration(session, client).start(42, phone)
+    customer_id = first.user.loyalty_account.iiko_customer_id
+
+    assert await UserRepository(session).delete_by_telegram_id(42) is True
+    assert await UserRepository(session).by_telegram_id(42) is None
+
+    second = await registration(session, client).start(42, phone)
+
+    assert second.user.loyalty_account.iiko_customer_id == customer_id
+    assert client.create_customer_calls == 0
+    assert client.add_card_calls == 0
 
 
 @pytest.mark.asyncio
@@ -371,9 +395,13 @@ async def test_delivery_can_only_be_configured_for_restaurant(session):
         )
 
     await RestaurantService(session).update_local_link(
-        restaurant.id, "delivery_url", "https://delivery.example.com/restaurant"
+        restaurant.id, "delivery_url", "https://eda.yandex.ru/restaurant/fish"
     )
-    assert restaurant.delivery_url == "https://delivery.example.com/restaurant"
+    assert restaurant.delivery_url == "https://eda.yandex.ru/restaurant/fish"
+    assert (
+        await RestaurantService(session).delivery_url()
+        == "https://eda.yandex.ru/restaurant/fish"
+    )
 
 
 @pytest.mark.asyncio

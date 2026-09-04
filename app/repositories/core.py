@@ -79,6 +79,14 @@ class UserRepository:
         await self.session.flush()
         return user
 
+    async def delete_by_telegram_id(self, telegram_id: int) -> bool:
+        user = await self.by_telegram_id(telegram_id)
+        if user is None:
+            return False
+        await self.session.delete(user)
+        await self.session.commit()
+        return True
+
     async def active(self):
         stmt = select(User).where(User.is_active.is_(True)).options(*self._loaded())
         return list((await self.session.scalars(stmt)).all())

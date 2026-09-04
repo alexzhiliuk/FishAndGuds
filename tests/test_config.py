@@ -21,8 +21,7 @@ def test_registration_web_app_uses_public_webhook_origin():
     assert settings.registration_web_app_url == "https://bot.example.com/registration"
 
 
-def test_public_restaurant_channels_have_expected_defaults():
+def test_bot_display_name_has_expected_default():
     settings = Settings()
 
     assert settings.bot_display_name == "Клуб «Рыба и Гады»"
-    assert settings.privacy_policy_url == "https://rybagady.ru/privacy"

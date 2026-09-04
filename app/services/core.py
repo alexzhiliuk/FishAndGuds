@@ -1,5 +1,6 @@
 import io
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Collection
 
@@ -27,24 +28,66 @@ from app.services.registration import RegistrationService
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class RegistrationDocument:
+    key: str
+    file_id: str
+    file_name: str
+
+
 class ApplicationSettingsService:
-    PRIVACY_POLICY_URL = "privacy_policy_url"
-    LOYALTY_RULES_URL = "loyalty_rules_url"
-    LINK_KEYS = (PRIVACY_POLICY_URL, LOYALTY_RULES_URL)
+    PRIVACY_POLICY = "privacy_policy"
+    LOYALTY_RULES = "loyalty_rules"
+    DOCUMENT_KEYS = (PRIVACY_POLICY, LOYALTY_RULES)
 
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def registration_links(self):
-        values = await ApplicationSettingRepository(self.session).values(self.LINK_KEYS)
-        return {key: values.get(key) for key in self.LINK_KEYS}
+    @classmethod
+    def _setting_keys(cls, key: str) -> tuple[str, str]:
+        if key not in cls.DOCUMENT_KEYS:
+            raise ValueError("Неизвестный документ")
+        return f"{key}_file_id", f"{key}_file_name"
 
-    async def update_link(self, key: str, value: str | None):
-        if key not in self.LINK_KEYS:
-            raise ValueError("Неизвестная настройка")
-        item = await ApplicationSettingRepository(self.session).set(key, value)
+    async def registration_documents(self):
+        setting_keys = tuple(
+            setting_key
+            for key in self.DOCUMENT_KEYS
+            for setting_key in self._setting_keys(key)
+        )
+        values = await ApplicationSettingRepository(self.session).values(setting_keys)
+        documents = {}
+        for key in self.DOCUMENT_KEYS:
+            file_id_key, file_name_key = self._setting_keys(key)
+            file_id = values.get(file_id_key)
+            documents[key] = (
+                RegistrationDocument(
+                    key=key,
+                    file_id=file_id,
+                    file_name=values.get(file_name_key) or f"{key}.pdf",
+                )
+                if file_id
+                else None
+            )
+        return documents
+
+    async def get_document(self, key: str):
+        return (await self.registration_documents())[key]
+
+    async def update_document(self, key: str, file_id: str, file_name: str):
+        file_id_key, file_name_key = self._setting_keys(key)
+        repo = ApplicationSettingRepository(self.session)
+        await repo.set(file_id_key, file_id)
+        await repo.set(file_name_key, file_name)
         await self.session.commit()
-        return item
+        return RegistrationDocument(key=key, file_id=file_id, file_name=file_name)
+
+    async def clear_document(self, key: str):
+        file_id_key, file_name_key = self._setting_keys(key)
+        repo = ApplicationSettingRepository(self.session)
+        await repo.set(file_id_key, None)
+        await repo.set(file_name_key, None)
+        await self.session.commit()
 
 
 class LoyaltyService:
@@ -117,6 +160,17 @@ class RestaurantService:
 
     async def get(self, item_id: int):
         return await RestaurantRepository(self.session).by_id(item_id)
+
+    async def delivery_url(self):
+        items = await self.list_active()
+        return next(
+            (
+                item.delivery_url
+                for item in items
+                if item.delivery_configurable and item.delivery_url
+            ),
+            None,
+        )
 
     async def update_local_link(self, item_id: int, field: str, value: str | None):
         item = await RestaurantRepository(self.session).update_local_link(
