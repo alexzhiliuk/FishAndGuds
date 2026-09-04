@@ -13,6 +13,7 @@ from app.services import (
     MailingService,
     RegistrationService,
     RegistrationSubmission,
+    RestaurantService,
     SyncService,
 )
 from app.services.phone import PhoneNormalizationService
@@ -336,15 +337,69 @@ async def test_iiko_sync_preserves_locally_managed_restaurant_links(session):
     await RestaurantService(session).update_local_link(
         restaurant.id, "reviews_url", "https://yandex.by/maps/org/example/reviews/"
     )
+    await RestaurantService(session).update_local_link(
+        restaurant.id, "booking_url", "https://booking.example.com/fallback"
+    )
+    await RestaurantService(session).update_local_link(
+        restaurant.id, "contact_phone", "+79818977766"
+    )
 
     await sync.sync_restaurants()
 
     refreshed = await RestaurantService(session).get(restaurant.id)
     assert refreshed.reviews_url == "https://yandex.by/maps/org/example/reviews/"
+    assert refreshed.booking_url == "https://booking.example.com/fallback"
+    assert refreshed.contact_phone == "+79818977766"
     assert refreshed.website_url in {
         "https://bistro.example.com",
         "https://restaurant.example.com",
     }
+
+
+@pytest.mark.asyncio
+async def test_delivery_can_only_be_configured_for_restaurant(session):
+    client = IikoTestDouble(default_organization_id=ORG)
+    sync = SyncService(session, client, default_organization_id=ORG)
+    await sync.sync_restaurants()
+    restaurants = await RestaurantService(session).list_all()
+    bistro = next(item for item in restaurants if "Бистро" in item.name)
+    restaurant = next(item for item in restaurants if item.name == "Рыба и гады")
+
+    with pytest.raises(ValueError, match="только для ресторана"):
+        await RestaurantService(session).update_local_link(
+            bistro.id, "delivery_url", "https://delivery.example.com/bistro"
+        )
+
+    await RestaurantService(session).update_local_link(
+        restaurant.id, "delivery_url", "https://delivery.example.com/restaurant"
+    )
+    assert restaurant.delivery_url == "https://delivery.example.com/restaurant"
+
+
+@pytest.mark.asyncio
+async def test_missing_iiko_website_clears_it_and_keeps_admin_booking_fallback(session):
+    from app.integrations.iiko.dto import IikoOrganization
+    from app.repositories.core import RestaurantRepository
+
+    repository = RestaurantRepository(session)
+    item = await repository.upsert_organization(
+        IikoOrganization(
+            id="restaurant-with-booking",
+            name="Ресторан",
+            website_url="https://iiko.example.com/booking",
+        )
+    )
+    item.booking_url = "https://admin.example.com/booking"
+    await session.commit()
+
+    await repository.upsert_organization(
+        IikoOrganization(id="restaurant-with-booking", name="Ресторан")
+    )
+    await session.commit()
+
+    refreshed = await repository.by_iiko_id("restaurant-with-booking")
+    assert refreshed.website_url is None
+    assert refreshed.booking_url == "https://admin.example.com/booking"
 
 
 @pytest.mark.asyncio

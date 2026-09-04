@@ -209,7 +209,7 @@ class RestaurantRepository:
             self.session.add(item)
         else:
             for key, value in api_values.items():
-                if value is not None or key in {"is_active", "name"}:
+                if value is not None or key in {"is_active", "name", "website_url"}:
                     setattr(item, key, value)
         await self.session.flush()
         return item
@@ -217,12 +217,19 @@ class RestaurantRepository:
     async def update_local_link(
         self, restaurant_id: int, field: str, value: str | None
     ):
-        allowed_fields = {"delivery_url", "reviews_url"}
+        allowed_fields = {
+            "booking_url",
+            "delivery_url",
+            "reviews_url",
+            "contact_phone",
+        }
         if field not in allowed_fields:
             raise ValueError("Недопустимое поле ссылки")
         item = await self.by_id(restaurant_id)
         if item is None:
             raise ValueError("Ресторан не найден")
+        if field == "delivery_url" and not item.delivery_configurable:
+            raise ValueError("Доставка настраивается только для ресторана")
         setattr(item, field, value)
         await self.session.flush()
         return item

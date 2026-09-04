@@ -9,11 +9,13 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 class Settings(BaseSettings):
     bot_token: str = ""
+    bot_display_name: str = "Клуб «Рыба и Гады»"
     database_url: str = "sqlite+aiosqlite:///./loyalty.db"
     admin_ids: Annotated[tuple[int, ...], NoDecode] = ()
     telegram_webhook_url: str = ""
     telegram_webhook_path: str = "/telegram/webhook"
     telegram_webhook_secret: str = ""
+    privacy_policy_url: str = "https://rybagady.ru/privacy"
     redis_url: str = "redis://redis:6379/0"
     iiko_organizations_cache_ttl_seconds: int = 1800
     iiko_base_url: str = "https://api-ru.iiko.services"
