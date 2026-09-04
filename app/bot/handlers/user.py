@@ -1,4 +1,5 @@
 import logging
+from html import escape
 from pathlib import Path
 
 from aiogram import F, Router
@@ -59,10 +60,19 @@ RESTAURANT_PROMPTS = {
 }
 MAIN_MENU_TEXT = (
     "<b>Добро пожаловать в клуб гедонистических привилегий Рыба и Гады!</b>\n\n"
-    "<i>Здесь ваше удовольствие превращается в приятные бонусы. Следите за новостями, "
-    "копите баллы и обменивайте их на любимые блюда.</i>\n\n"
-    "Ждем в гости! <i>Море волнуется за вас!</i>"
+    "Здесь ваше удовольствие превращается в приятные бонусы. Следите за новостями, "
+    "копите баллы и оплачивайте ими любимые блюда.\n\n"
+    "Здесь вы можете:\n"
+    "— Узнать информацию по вашей карте лояльности\n"
+    "— Показать ваш QR-код для списания и начисления бонусов\n"
+    "— Забронировать стол в Бистро или ресторане «Рыба и Гады»\n"
+    "— Заказать доставку\n"
+    "— Оставить отзыв\n"
+    "— Связаться с рестораном\n\n"
+    "Ждем в гости! Море волнуется без вас!"
 )
+MENU_ONLY_TEXT = "\u2060"
+CONNECTED_TEXT = "Спасибо, карта найдена и подключена."
 
 
 def format_quantity(value) -> str:
@@ -102,17 +112,34 @@ async def send_main_menu(
 ):
     is_admin = user_id in settings.admin_ids
     await answer_with_buttons(
-        message, text, reply_markup=main_menu(is_admin), parse_mode="HTML"
+        message,
+        text,
+        reply_markup=main_menu(
+            is_admin,
+            booking_url=settings.booking_url,
+            delivery_url=settings.delivery_url,
+            reviews_url=settings.reviews_url,
+        ),
+        parse_mode="HTML",
     )
 
 
-async def send_registration_prompt(message: Message, settings: Settings):
+async def send_registration_prompt(
+    message: Message, settings: Settings, session: AsyncSession
+):
+    links = await ApplicationSettingsService(session).registration_links()
+    policy_url = (
+        links[ApplicationSettingsService.PRIVACY_POLICY_URL]
+        or settings.privacy_policy_url
+    )
     await send_visual(
         message,
         settings.assets_dir / "gallery_21.jpeg",
         "Чтобы подключить карту, нажмите «📱 Поделиться номером» ниже.\n\n"
-        "Номер необходимо отправить именно кнопкой Telegram, а не вводить текстом.",
-        reply_markup=phone_keyboard(),
+        "Номер необходимо отправить именно кнопкой Telegram, а не вводить текстом.\n\n"
+        "Отправляя данные, вы соглашаетесь с Условиями политики "
+        "конфиденциальности и обработкой персональных данных.",
+        reply_markup=phone_keyboard(policy_url),
     )
 
 
@@ -140,7 +167,7 @@ async def send_profile(
         session, iiko, settings.iiko_default_organization_id
     ).get_profile(user_id)
     if not data:
-        await send_registration_prompt(message, settings)
+        await send_registration_prompt(message, settings, session)
         return
     user, card = data["user"], data["card"]
     full_name = " ".join(
@@ -166,7 +193,8 @@ async def start(
         message.from_user.id
     )
     if not user:
-        await send_registration_prompt(message, settings)
+        await message.answer(MAIN_MENU_TEXT, parse_mode="HTML")
+        await send_registration_prompt(message, settings, session)
         return
     await message.answer("Открываю главное меню.", reply_markup=ReplyKeyboardRemove())
     await send_main_menu(message, message.from_user.id, settings)
@@ -187,10 +215,10 @@ async def register(
         result = await registration_service(session, iiko, settings).start(
             message.from_user.id, message.contact.phone_number
         )
-        await message.answer("Спасибо!", reply_markup=ReplyKeyboardRemove())
         if result.user:
-            await message.answer("Карта найдена и подключена! Добро пожаловать!")
-            await send_main_menu(message, message.from_user.id, settings)
+            await send_main_menu(
+                message, message.from_user.id, settings, text=CONNECTED_TEXT
+            )
             return
         await state.clear()
         await state.update_data(
@@ -241,12 +269,16 @@ async def registration_complete(
     )
     pending = user.loyalty_account.iiko_sync_status.value != "synced"
     await state.clear()
-    await message.answer(
-        "Регистрация завершена."
-        + (" Карта создаётся автоматически." if pending else " Карта подключена."),
-        reply_markup=ReplyKeyboardRemove(),
+    await send_main_menu(
+        message,
+        message.from_user.id,
+        settings,
+        text=(
+            "Спасибо, регистрация завершена. Карта создаётся автоматически."
+            if pending
+            else CONNECTED_TEXT
+        ),
     )
-    await send_main_menu(message, message.from_user.id, settings)
 
 
 @router.message(F.text == "👤 Личный кабинет")
@@ -264,7 +296,7 @@ async def profile_callback(
         session, iiko, settings.iiko_default_organization_id
     ).get_profile(callback.from_user.id)
     if not data:
-        await send_registration_prompt(callback.message, settings)
+        await send_registration_prompt(callback.message, settings, session)
         await callback.answer()
         return
     user, card = data["user"], data["card"]
@@ -287,13 +319,17 @@ async def profile_back(
 
 @router.callback_query(F.data == "nav:main")
 async def main_menu_callback(callback: CallbackQuery, settings: Settings):
-    await send_main_menu(callback.message, callback.from_user.id, settings)
+    await send_main_menu(
+        callback.message, callback.from_user.id, settings, text=MENU_ONLY_TEXT
+    )
     await callback.answer()
 
 
 @router.callback_query(F.data == "profile:main")
 async def profile_to_main(callback: CallbackQuery, settings: Settings):
-    await send_main_menu(callback.message, callback.from_user.id, settings)
+    await send_main_menu(
+        callback.message, callback.from_user.id, settings, text=MENU_ONLY_TEXT
+    )
     await callback.answer()
 
 
@@ -426,12 +462,22 @@ async def choose_restaurant(message: Message, session: AsyncSession):
     await send_restaurants(message, session, action)
 
 
-@router.callback_query(
-    F.data.in_({"menu:booking", "menu:delivery", "menu:reviews", "menu:contact"})
-)
+@router.callback_query(F.data.in_({"menu:booking", "menu:delivery", "menu:reviews"}))
 async def choose_restaurant_callback(callback: CallbackQuery, session: AsyncSession):
     action = callback.data.split(":", 1)[1]
     await send_restaurants(callback.message, session, action)
+    await callback.answer()
+
+
+@router.callback_query(F.data == "menu:contact")
+async def contact_restaurant(callback: CallbackQuery, settings: Settings):
+    phone = escape(settings.contact_phone)
+    await answer_with_buttons(
+        callback.message,
+        f'📞 Связаться с рестораном\n\n<a href="tel:{phone}">{phone}</a>',
+        reply_markup=back_keyboard("nav:main"),
+        parse_mode="HTML",
+    )
     await callback.answer()
 
 
@@ -473,6 +519,8 @@ async def fallback(
         message.from_user.id
     )
     if user:
-        await send_main_menu(message, message.from_user.id, settings)
+        await send_main_menu(
+            message, message.from_user.id, settings, text=MENU_ONLY_TEXT
+        )
     else:
-        await send_registration_prompt(message, settings)
+        await send_registration_prompt(message, settings, session)

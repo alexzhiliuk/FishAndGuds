@@ -7,9 +7,15 @@ from aiogram.types import (
 )
 
 
-def phone_keyboard():
+def phone_keyboard(policy_url: str | None = None):
+    rows = []
+    if policy_url:
+        rows.append(
+            [KeyboardButton(text="Политика", web_app=WebAppInfo(url=policy_url))]
+        )
+    rows.append([KeyboardButton(text="📱 Поделиться номером", request_contact=True)])
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Поделиться номером", request_contact=True)]],
+        keyboard=rows,
         resize_keyboard=True,
         one_time_keyboard=True,
     )
@@ -25,24 +31,31 @@ def registration_web_app_keyboard(url: str):
     )
 
 
-def main_menu(is_admin: bool = False):
+def main_menu(
+    is_admin: bool = False,
+    *,
+    booking_url: str | None = None,
+    delivery_url: str | None = None,
+    reviews_url: str | None = None,
+):
+    def external_or_callback(text: str, url: str | None, callback_data: str):
+        if url:
+            return InlineKeyboardButton(text=text, url=url)
+        return InlineKeyboardButton(text=text, callback_data=callback_data)
+
     rows = [
         [
-            InlineKeyboardButton(text="🔳 QR-код", callback_data="menu:qr"),
+            InlineKeyboardButton(text="🔲 Мой QR-код", callback_data="menu:qr"),
             InlineKeyboardButton(
                 text="👤 Личный кабинет", callback_data="menu:profile"
             ),
         ],
         [
-            InlineKeyboardButton(text="🍽 Забронировать", callback_data="menu:booking"),
-            InlineKeyboardButton(
-                text="🛵 Заказать доставку", callback_data="menu:delivery"
-            ),
+            external_or_callback("🍽 Забронировать стол", booking_url, "menu:booking"),
+            external_or_callback("🛵 Заказать доставку", delivery_url, "menu:delivery"),
         ],
         [
-            InlineKeyboardButton(
-                text="⭐ Оставить отзыв", callback_data="menu:reviews"
-            ),
+            external_or_callback("⭐ Оставить отзыв", reviews_url, "menu:reviews"),
             InlineKeyboardButton(
                 text="📞 Связаться с рестораном", callback_data="menu:contact"
             ),
@@ -60,7 +73,9 @@ def profile_keyboard():
         inline_keyboard=[
             [
                 InlineKeyboardButton(text="🔳 Показать QR", callback_data="profile:qr"),
-                InlineKeyboardButton(text="🧾 Покупки", callback_data="purchases:0"),
+                InlineKeyboardButton(
+                    text="🧾 История покупок", callback_data="purchases:0"
+                ),
             ],
             [
                 InlineKeyboardButton(
