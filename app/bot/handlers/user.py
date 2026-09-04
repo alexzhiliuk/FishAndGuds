@@ -17,7 +17,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.keyboards.common import (
     action_keyboard,
     back_keyboard,
-    loyalty_terms_keyboard,
     main_menu,
     phone_keyboard,
     profile_keyboard,
@@ -105,13 +104,18 @@ async def send_visual(message: Message, path: Path, caption: str, **kwargs):
 
 
 async def send_main_menu(
-    message: Message, user_id: int, settings: Settings, text: str = MAIN_MENU_TEXT
+    message: Message,
+    user_id: int,
+    settings: Settings,
+    session: AsyncSession,
+    text: str = MAIN_MENU_TEXT,
 ):
     is_admin = user_id in settings.admin_ids
+    delivery_url = await RestaurantService(session).delivery_url()
     await answer_with_buttons(
         message,
         text,
-        reply_markup=main_menu(is_admin),
+        reply_markup=main_menu(is_admin, delivery_url),
         parse_mode="HTML",
     )
 
@@ -119,20 +123,30 @@ async def send_main_menu(
 async def send_registration_prompt(
     message: Message, settings: Settings, session: AsyncSession
 ):
-    links = await ApplicationSettingsService(session).registration_links()
-    policy_url = (
-        links[ApplicationSettingsService.PRIVACY_POLICY_URL]
-        or settings.privacy_policy_url
+    policy = await ApplicationSettingsService(session).get_document(
+        ApplicationSettingsService.PRIVACY_POLICY
     )
     await send_visual(
         message,
         settings.assets_dir / "gallery_21.jpeg",
-        "Чтобы подключить карту, нажмите «📱 Поделиться номером» ниже.\n\n"
+        MAIN_MENU_TEXT
+        + "\n\nЧтобы подключить карту, нажмите «📱 Поделиться номером» ниже.\n\n"
         "Номер необходимо отправить именно кнопкой Telegram, а не вводить текстом.\n\n"
         "Отправляя данные, вы соглашаетесь с Условиями политики "
         "конфиденциальности и обработкой персональных данных.",
-        reply_markup=phone_keyboard(policy_url),
+        parse_mode="HTML",
     )
+    if policy is not None:
+        await message.answer_document(
+            policy.file_id,
+            caption="Политика обработки персональных данных",
+            reply_markup=phone_keyboard(),
+        )
+    else:
+        await message.answer(
+            "Политика пока не загружена администратором.",
+            reply_markup=phone_keyboard(),
+        )
 
 
 def registration_service(session, iiko, settings):
@@ -200,10 +214,24 @@ async def start(
         message.from_user.id
     )
     if not user:
-        await message.answer(MAIN_MENU_TEXT, parse_mode="HTML")
         await send_registration_prompt(message, settings, session)
         return
-    await send_main_menu(message, message.from_user.id, settings)
+    await send_main_menu(message, message.from_user.id, settings, session)
+
+
+@router.message(F.text == "Политика")
+async def privacy_policy(message: Message, session: AsyncSession):
+    document = await ApplicationSettingsService(session).get_document(
+        ApplicationSettingsService.PRIVACY_POLICY
+    )
+    if document is None:
+        await message.answer("Политика пока не загружена администратором.")
+        return
+    await message.answer_document(
+        document.file_id,
+        caption="Политика обработки персональных данных",
+        reply_markup=phone_keyboard(),
+    )
 
 
 @router.message(F.contact)
@@ -222,8 +250,20 @@ async def register(
             message.from_user.id, message.contact.phone_number
         )
         if result.user:
+            await state.clear()
             await send_main_menu(
-                message, message.from_user.id, settings, text=CONNECTED_TEXT
+                message,
+                message.from_user.id,
+                settings,
+                session,
+                text=CONNECTED_TEXT,
+            )
+            return
+        state_data = await state.get_data()
+        if state_data.get("admin_local_registration_only"):
+            await message.answer(
+                "Гость с этим номером не найден в iiko. Локальный профиль не создан. "
+                "Для тестовой регистрации используйте номер уже существующего гостя iiko."
             )
             return
         await state.clear()
@@ -279,6 +319,7 @@ async def registration_complete(
         message,
         message.from_user.id,
         settings,
+        session,
         text=(
             "Спасибо, регистрация завершена. Карта создаётся автоматически."
             if pending
@@ -324,17 +365,29 @@ async def profile_back(
 
 
 @router.callback_query(F.data == "nav:main")
-async def main_menu_callback(callback: CallbackQuery, settings: Settings):
+async def main_menu_callback(
+    callback: CallbackQuery, settings: Settings, session: AsyncSession
+):
     await send_main_menu(
-        callback.message, callback.from_user.id, settings, text=MENU_ONLY_TEXT
+        callback.message,
+        callback.from_user.id,
+        settings,
+        session,
+        text=MENU_ONLY_TEXT,
     )
     await callback.answer()
 
 
 @router.callback_query(F.data == "profile:main")
-async def profile_to_main(callback: CallbackQuery, settings: Settings):
+async def profile_to_main(
+    callback: CallbackQuery, settings: Settings, session: AsyncSession
+):
     await send_main_menu(
-        callback.message, callback.from_user.id, settings, text=MENU_ONLY_TEXT
+        callback.message,
+        callback.from_user.id,
+        settings,
+        session,
+        text=MENU_ONLY_TEXT,
     )
     await callback.answer()
 
@@ -400,22 +453,21 @@ async def purchases(callback: CallbackQuery, session: AsyncSession, settings: Se
 
 @router.callback_query(F.data == "profile:terms")
 async def terms(callback: CallbackQuery, session: AsyncSession):
-    links = await ApplicationSettingsService(session).registration_links()
-    rules_url = links[ApplicationSettingsService.LOYALTY_RULES_URL]
-    text = (
-        "📜 Условия программы лояльности\n\n"
-        "Ознакомиться с условиями программы лояльности можно по ссылке ниже."
+    document = await ApplicationSettingsService(session).get_document(
+        ApplicationSettingsService.LOYALTY_RULES
     )
-    text += (
-        f"\n\n{rules_url}"
-        if rules_url
-        else "\n\nСсылка пока не указана администратором."
-    )
-    await answer_with_buttons(
-        callback.message,
-        text,
-        reply_markup=loyalty_terms_keyboard(rules_url),
-    )
+    if document is None:
+        await answer_with_buttons(
+            callback.message,
+            "📜 Правила программы лояльности пока не загружены администратором.",
+            reply_markup=back_keyboard("nav:profile"),
+        )
+    else:
+        await callback.message.answer_document(
+            document.file_id,
+            caption="📜 Правила программы лояльности",
+            reply_markup=back_keyboard("nav:profile"),
+        )
     await callback.answer()
 
 
@@ -450,6 +502,20 @@ async def choose_restaurant(message: Message, session: AsyncSession):
 )
 async def choose_restaurant_callback(callback: CallbackQuery, session: AsyncSession):
     action = callback.data.split(":", 1)[1]
+    if action == "delivery":
+        url = await RestaurantService(session).delivery_url()
+        text = "🛵 Доставка"
+        if not url:
+            text += "\n\nСсылка пока не настроена."
+        await answer_with_buttons(
+            callback.message,
+            text,
+            reply_markup=action_keyboard(
+                "🛵 Открыть Яндекс Еду", url, "delivery", back_callback="nav:main"
+            ),
+        )
+        await callback.answer()
+        return
     await send_restaurants(callback.message, session, action)
     await callback.answer()
 
@@ -506,7 +572,11 @@ async def fallback(
     )
     if user:
         await send_main_menu(
-            message, message.from_user.id, settings, text=MENU_ONLY_TEXT
+            message,
+            message.from_user.id,
+            settings,
+            session,
+            text=MENU_ONLY_TEXT,
         )
     else:
         await send_registration_prompt(message, settings, session)
