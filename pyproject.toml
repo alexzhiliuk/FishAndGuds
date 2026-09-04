@@ -17,11 +17,11 @@ dependencies = [
     "qrcode[pil]>=8.0,<9",
     "greenlet>=3.1,<4",
     "redis>=5,<8",
-    "pre-commit>=4.6.2",
 ]
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4.6.2",
     "pytest>=8.3,<9",
     "pytest-asyncio>=0.25,<1",
 ]
