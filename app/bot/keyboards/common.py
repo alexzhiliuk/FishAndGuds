@@ -34,7 +34,6 @@ def registration_web_app_keyboard(url: str):
 def main_menu(
     is_admin: bool = False,
     *,
-    booking_url: str | None = None,
     delivery_url: str | None = None,
     reviews_url: str | None = None,
 ):
@@ -51,7 +50,9 @@ def main_menu(
             ),
         ],
         [
-            external_or_callback("🍽 Забронировать стол", booking_url, "menu:booking"),
+            InlineKeyboardButton(
+                text="🍽 Забронировать стол", callback_data="menu:booking"
+            ),
             external_or_callback("🛵 Заказать доставку", delivery_url, "menu:delivery"),
         ],
         [
@@ -79,11 +80,6 @@ def profile_keyboard():
             ],
             [
                 InlineKeyboardButton(
-                    text="🔔 Уведомления", callback_data="notifications:show"
-                )
-            ],
-            [
-                InlineKeyboardButton(
                     text="📜 Условия программы", callback_data="profile:terms"
                 )
             ],
@@ -102,53 +98,19 @@ def loyalty_terms_keyboard(rules_url: str | None):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def notifications_keyboard(settings):
-    def mark(value):
-        return "✅" if value else "❌"
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=f"Акции {mark(settings.promotions_enabled)}",
-                    callback_data="notify:promotions",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Новости {mark(settings.news_enabled)}",
-                    callback_data="notify:news",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"Праздники {mark(settings.holidays_enabled)}",
-                    callback_data="notify:holidays",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=f"СМС {mark(settings.sms_enabled)}", callback_data="notify:sms"
-                ),
-                InlineKeyboardButton(
-                    text=f"PUSH {mark(settings.push_enabled)}",
-                    callback_data="notify:push",
-                ),
-                InlineKeyboardButton(
-                    text=f"E-mail {mark(settings.email_enabled)}",
-                    callback_data="notify:email",
-                ),
-            ],
-            [InlineKeyboardButton(text="⬅️ Назад", callback_data="nav:profile")],
-        ]
-    )
-
-
-def restaurant_keyboard(restaurants, action: str):
+def restaurant_keyboard(
+    restaurants, action: str, urls_by_id: dict[int, str | None] | None = None
+):
+    urls_by_id = urls_by_id or {}
     rows = [
         [
             InlineKeyboardButton(
-                text=f"🏪 {r.name}", callback_data=f"restaurant:{action}:{r.id}"
+                text=f"🏪 {r.name}",
+                **(
+                    {"url": urls_by_id[r.id]}
+                    if urls_by_id.get(r.id)
+                    else {"callback_data": f"restaurant:{action}:{r.id}"}
+                ),
             )
         ]
         for r in restaurants

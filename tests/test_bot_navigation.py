@@ -18,7 +18,6 @@ from app.bot.keyboards.common import (
     mailing_actions,
     mailing_input_back,
     mailing_list_keyboard,
-    notifications_keyboard,
     loyalty_terms_keyboard,
     phone_keyboard,
     profile_keyboard,
@@ -97,7 +96,6 @@ async def test_new_screen_does_not_delete_or_edit_previous_photo_message(tmp_pat
 def test_main_menu_is_inline_and_uses_callback_navigation():
     markup = main_menu(
         is_admin=True,
-        booking_url="https://booking.example.com",
         delivery_url="https://delivery.example.com",
         reviews_url="https://reviews.example.com",
     )
@@ -106,6 +104,7 @@ def test_main_menu_is_inline_and_uses_callback_navigation():
     assert callback_data(markup) == [
         "menu:qr",
         "menu:profile",
+        "menu:booking",
         "menu:contact",
         "menu:admin",
     ]
@@ -113,10 +112,8 @@ def test_main_menu_is_inline_and_uses_callback_navigation():
         "menu:qr",
         "menu:profile",
     ]
-    assert [button.url for button in markup.inline_keyboard[1]] == [
-        "https://booking.example.com",
-        "https://delivery.example.com",
-    ]
+    assert markup.inline_keyboard[1][0].callback_data == "menu:booking"
+    assert markup.inline_keyboard[1][1].url == "https://delivery.example.com"
     assert markup.inline_keyboard[2][0].url == "https://reviews.example.com"
     assert markup.inline_keyboard[0][0].text == "🔲 Мой QR-код"
     assert markup.inline_keyboard[1][0].text == "🍽 Забронировать стол"
@@ -191,6 +188,23 @@ async def test_found_card_is_confirmed_once_with_main_menu(monkeypatch):
     message.answer.assert_not_awaited()
     send_main_menu.assert_awaited_once()
     assert send_main_menu.await_args.kwargs["text"] == user_handlers.CONNECTED_TEXT
+
+
+@pytest.mark.asyncio
+async def test_registered_start_opens_menu_without_intermediate_message(monkeypatch):
+    service = SimpleNamespace(get_local_user=AsyncMock(return_value=object()))
+    send_main_menu = AsyncMock()
+    monkeypatch.setattr(
+        user_handlers, "registration_service", lambda session, iiko, settings: service
+    )
+    monkeypatch.setattr(user_handlers, "send_main_menu", send_main_menu)
+    message = SimpleNamespace(from_user=SimpleNamespace(id=42), answer=AsyncMock())
+    settings = SimpleNamespace()
+
+    await user_handlers.start(message, object(), settings, object())
+
+    message.answer.assert_not_awaited()
+    send_main_menu.assert_awaited_once_with(message, 42, settings)
 
 
 @pytest.mark.asyncio
@@ -290,6 +304,11 @@ def test_main_menu_text_does_not_duplicate_keyboard_actions():
     assert "Выберите действие:" not in user_handlers.MAIN_MENU_TEXT
     assert "🔳 QR-код" not in user_handlers.MAIN_MENU_TEXT
     assert "⚙️ Админ-панель" not in user_handlers.MAIN_MENU_TEXT
+
+
+def test_main_menu_return_uses_visible_title_without_repeating_welcome():
+    assert user_handlers.MENU_ONLY_TEXT == "Главное меню"
+    assert "Добро пожаловать" not in user_handlers.MENU_ONLY_TEXT
 
 
 def test_admin_menu_does_not_expose_users_button():
@@ -446,16 +465,7 @@ def test_mailing_name_list_has_selection_and_pagination():
     ]
 
 
-def test_profile_and_notifications_have_back_navigation():
-    settings = SimpleNamespace(
-        promotions_enabled=True,
-        news_enabled=False,
-        holidays_enabled=True,
-        sms_enabled=True,
-        push_enabled=False,
-        email_enabled=True,
-    )
-
+def test_profile_has_no_user_notification_settings():
     profile = profile_keyboard()
     assert "profile:main" in callback_data(profile)
     assert any(
@@ -463,9 +473,11 @@ def test_profile_and_notifications_have_back_navigation():
         for row in profile.inline_keyboard
         for button in row
     )
-    assert "nav:profile" in callback_data(notifications_keyboard(settings))
-    assert {"notify:sms", "notify:push", "notify:email"}.issubset(
-        callback_data(notifications_keyboard(settings))
+    assert "notifications:show" not in callback_data(profile)
+    assert all(
+        "Уведомления" not in button.text
+        for row in profile.inline_keyboard
+        for button in row
     )
     assert "purchases:back" in callback_data(purchases_keyboard(page=0, has_next=False))
 
@@ -548,13 +560,20 @@ async def test_profile_return_from_intermediate_screen_sends_new_message(monkeyp
 
 @pytest.mark.asyncio
 async def test_restaurant_navigation_always_sends_new_messages(monkeypatch):
-    restaurants = [SimpleNamespace(id=7, name="Ресторан")]
+    restaurants = [
+        SimpleNamespace(id=7, name="Ресторан", address=None, website_url=None)
+    ]
     service = SimpleNamespace(list_active=AsyncMock(return_value=restaurants))
     monkeypatch.setattr(user_handlers, "RestaurantService", lambda session: service)
     message = SimpleNamespace(photo=None, edit_text=AsyncMock(), answer=AsyncMock())
     callback = SimpleNamespace(data="menu:booking", message=message, answer=AsyncMock())
+    settings = SimpleNamespace(
+        booking_restaurant_url="https://booking.example.com/restaurant",
+        booking_bistro_url="https://booking.example.com/bistro",
+        booking_url="https://booking.example.com",
+    )
 
-    await user_handlers.choose_restaurant_callback(callback, session=object())
+    await user_handlers.choose_restaurant_callback(callback, object(), settings)
 
     message.answer.assert_awaited_once()
     message.edit_text.assert_not_awaited()
@@ -562,16 +581,54 @@ async def test_restaurant_navigation_always_sends_new_messages(monkeypatch):
     message.edit_text.reset_mock()
     message.answer.reset_mock()
     callback.data = "restaurants:booking"
-    await user_handlers.restaurants_back(callback, session=object())
+    await user_handlers.restaurants_back(callback, object(), settings)
 
     message.answer.assert_awaited_once()
     message.edit_text.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_booking_restaurants_are_parsed_and_open_direct_location_urls(
+    monkeypatch,
+):
+    restaurants = [
+        SimpleNamespace(
+            id=1,
+            name="Бистро Рыба и гады",
+            address="Итальянская, 14/16",
+            website_url=None,
+        ),
+        SimpleNamespace(
+            id=2,
+            name="Рыба и гады",
+            address="Большая Конюшенная, 5 Ресторан",
+            website_url=None,
+        ),
+    ]
+    service = SimpleNamespace(list_active=AsyncMock(return_value=restaurants))
+    monkeypatch.setattr(user_handlers, "RestaurantService", lambda session: service)
+    message = SimpleNamespace(answer=AsyncMock())
+    settings = SimpleNamespace(
+        booking_restaurant_url="https://booking.example.com/restaurant",
+        booking_bistro_url="https://booking.example.com/bistro",
+        booking_url="https://booking.example.com",
+    )
+
+    await user_handlers.send_restaurants(message, object(), "booking", settings)
+
+    service.list_active.assert_awaited_once_with()
+    markup = message.answer.await_args.kwargs["reply_markup"]
+    assert [row[0].url for row in markup.inline_keyboard[:-1]] == [
+        "https://booking.example.com/bistro",
+        "https://booking.example.com/restaurant",
+    ]
+    assert callback_data(markup) == ["nav:main"]
+
+
 @pytest.mark.parametrize(
     ("action", "expected"),
     [
-        ("booking", "забронировать столик"),
+        ("booking", "Где хотите забронировать стол?"),
         ("delivery", "оформить доставку"),
         ("reviews", "оставить отзыв"),
         ("contact", "связаться"),
@@ -603,28 +660,20 @@ async def test_admin_navigation_always_sends_new_messages():
 
 
 @pytest.mark.asyncio
-async def test_notifications_open_as_new_message_but_toggles_still_edit(monkeypatch):
-    notification_settings = SimpleNamespace(
-        promotions_enabled=True,
-        news_enabled=True,
-        holidays_enabled=True,
-        sms_enabled=True,
-        push_enabled=True,
-        email_enabled=True,
-    )
-    service = SimpleNamespace(
-        get_settings=AsyncMock(return_value=notification_settings)
-    )
-    monkeypatch.setattr(user_handlers, "NotificationService", lambda session: service)
+async def test_old_notification_buttons_are_safe_noops():
     message = SimpleNamespace(answer=AsyncMock(), edit_text=AsyncMock())
     callback = SimpleNamespace(
-        from_user=SimpleNamespace(id=42), message=message, answer=AsyncMock()
+        data="notifications:show",
+        from_user=SimpleNamespace(id=42),
+        message=message,
+        answer=AsyncMock(),
     )
 
-    await user_handlers.notification_show(callback, session=object())
+    await user_handlers.removed_notifications(callback)
 
-    message.answer.assert_awaited_once()
+    message.answer.assert_not_awaited()
     message.edit_text.assert_not_awaited()
+    callback.answer.assert_awaited_once_with("Раздел уведомлений больше недоступен")
 
 
 @pytest.mark.asyncio
@@ -655,34 +704,6 @@ def test_restaurant_flows_have_back_buttons(action):
     assert callback_data(selection) == [f"restaurant:{action}:7", "nav:main"]
     assert callback_data(details) == [f"restaurants:{action}"]
     assert callback_data(unavailable) == [f"restaurants:{action}"]
-
-
-@pytest.mark.asyncio
-async def test_notification_toggle_sends_new_message(monkeypatch):
-    settings = SimpleNamespace(
-        promotions_enabled=False,
-        news_enabled=True,
-        holidays_enabled=True,
-        sms_enabled=True,
-        push_enabled=True,
-        email_enabled=False,
-    )
-    service = SimpleNamespace(toggle=AsyncMock(return_value=settings))
-    monkeypatch.setattr(user_handlers, "NotificationService", lambda session: service)
-
-    message = SimpleNamespace(answer=AsyncMock(), edit_text=AsyncMock())
-    callback = SimpleNamespace(
-        data="notify:promotions",
-        from_user=SimpleNamespace(id=42),
-        message=message,
-        answer=AsyncMock(),
-    )
-
-    await user_handlers.notification_toggle(callback, session=object())
-
-    message.answer.assert_awaited_once()
-    message.edit_text.assert_not_awaited()
-    callback.answer.assert_awaited_once()
 
 
 @pytest.mark.asyncio

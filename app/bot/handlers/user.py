@@ -10,7 +10,6 @@ from aiogram.types import (
     CallbackQuery,
     FSInputFile,
     Message,
-    ReplyKeyboardRemove,
 )
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,7 +19,6 @@ from app.bot.keyboards.common import (
     back_keyboard,
     loyalty_terms_keyboard,
     main_menu,
-    notifications_keyboard,
     phone_keyboard,
     profile_keyboard,
     purchases_keyboard,
@@ -37,7 +35,6 @@ from app.integrations.iiko.client import IikoClient
 from app.services import (
     ApplicationSettingsService,
     LoyaltyService,
-    NotificationService,
     PurchaseService,
     RegistrationService,
     RegistrationSubmission,
@@ -53,7 +50,7 @@ ACTIONS = {
     "contact": ("🌐 Открыть сайт ресторана", "website_url", "📞 Контакты"),
 }
 RESTAURANT_PROMPTS = {
-    "booking": "Выберите ресторан, в котором хотите забронировать столик:",
+    "booking": "Где хотите забронировать стол?",
     "delivery": "Выберите ресторан, из которого хотите оформить доставку:",
     "reviews": "Выберите ресторан, о котором хотите оставить отзыв:",
     "contact": "Выберите ресторан, с которым хотите связаться:",
@@ -71,7 +68,7 @@ MAIN_MENU_TEXT = (
     "— Связаться с рестораном\n\n"
     "Ждем в гости! Море волнуется без вас!"
 )
-MENU_ONLY_TEXT = "\u2060"
+MENU_ONLY_TEXT = "Главное меню"
 CONNECTED_TEXT = "Спасибо, карта найдена и подключена."
 
 
@@ -116,7 +113,6 @@ async def send_main_menu(
         text,
         reply_markup=main_menu(
             is_admin,
-            booking_url=settings.booking_url,
             delivery_url=settings.delivery_url,
             reviews_url=settings.reviews_url,
         ),
@@ -178,9 +174,25 @@ async def send_profile(
     await answer_with_buttons(message, text, reply_markup=profile_keyboard())
 
 
-async def send_restaurants(message: Message, session: AsyncSession, action: str):
+def restaurant_action_url(item, action: str, settings: Settings) -> str | None:
+    if action == "booking":
+        identity = f"{item.name} {getattr(item, 'address', None) or ''}".casefold()
+        if "бистро" in identity or "итальянск" in identity:
+            return settings.booking_bistro_url
+        if "ресторан" in identity or "конюшенн" in identity:
+            return settings.booking_restaurant_url
+        return getattr(item, "website_url", None) or settings.booking_url
+    return getattr(item, ACTIONS[action][1])
+
+
+async def send_restaurants(
+    message: Message, session: AsyncSession, action: str, settings: Settings
+):
     items = await RestaurantService(session).list_active()
-    kwargs = {"reply_markup": restaurant_keyboard(items, action)}
+    urls_by_id = {
+        item.id: restaurant_action_url(item, action, settings) for item in items
+    }
+    kwargs = {"reply_markup": restaurant_keyboard(items, action, urls_by_id)}
     text = RESTAURANT_PROMPTS[action]
     await answer_with_buttons(message, text, **kwargs)
 
@@ -196,7 +208,6 @@ async def start(
         await message.answer(MAIN_MENU_TEXT, parse_mode="HTML")
         await send_registration_prompt(message, settings, session)
         return
-    await message.answer("Открываю главное меню.", reply_markup=ReplyKeyboardRemove())
     await send_main_menu(message, message.from_user.id, settings)
 
 
@@ -414,32 +425,9 @@ async def terms(callback: CallbackQuery, session: AsyncSession):
 
 
 @router.callback_query(F.data == "notifications:show")
-async def notification_show(callback: CallbackQuery, session: AsyncSession):
-    notification_settings = await NotificationService(session).get_settings(
-        callback.from_user.id
-    )
-    if not notification_settings:
-        await callback.answer("Сначала зарегистрируйтесь", show_alert=True)
-        return
-    await answer_with_buttons(
-        callback.message,
-        "🔔 Уведомления\n\nВыберите категорию, чтобы включить или отключить её.",
-        reply_markup=notifications_keyboard(notification_settings),
-    )
-    await callback.answer()
-
-
 @router.callback_query(F.data.startswith("notify:"))
-async def notification_toggle(callback: CallbackQuery, session: AsyncSession):
-    settings = await NotificationService(session).toggle(
-        callback.from_user.id, callback.data.split(":")[1]
-    )
-    await answer_with_buttons(
-        callback.message,
-        "🔔 Уведомления\n\nНастройки сохранены. Выберите категорию, чтобы включить или отключить её.",
-        reply_markup=notifications_keyboard(settings),
-    )
-    await callback.answer("Настройки сохранены")
+async def removed_notifications(callback: CallbackQuery):
+    await callback.answer("Раздел уведомлений больше недоступен")
 
 
 @router.message(
@@ -452,20 +440,24 @@ async def notification_toggle(callback: CallbackQuery, session: AsyncSession):
         }
     )
 )
-async def choose_restaurant(message: Message, session: AsyncSession):
+async def choose_restaurant(
+    message: Message, session: AsyncSession, settings: Settings
+):
     action = {
         "🍽 Забронировать": "booking",
         "🛵 Заказать доставку": "delivery",
         "⭐ Оставить отзыв": "reviews",
         "📞 Связаться с рестораном": "contact",
     }[message.text]
-    await send_restaurants(message, session, action)
+    await send_restaurants(message, session, action, settings)
 
 
 @router.callback_query(F.data.in_({"menu:booking", "menu:delivery", "menu:reviews"}))
-async def choose_restaurant_callback(callback: CallbackQuery, session: AsyncSession):
+async def choose_restaurant_callback(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
     action = callback.data.split(":", 1)[1]
-    await send_restaurants(callback.message, session, action)
+    await send_restaurants(callback.message, session, action, settings)
     await callback.answer()
 
 
@@ -482,9 +474,11 @@ async def contact_restaurant(callback: CallbackQuery, settings: Settings):
 
 
 @router.callback_query(F.data.startswith("restaurants:"))
-async def restaurants_back(callback: CallbackQuery, session: AsyncSession):
+async def restaurants_back(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
     action = callback.data.split(":", 1)[1]
-    await send_restaurants(callback.message, session, action)
+    await send_restaurants(callback.message, session, action, settings)
     await callback.answer()
 
 

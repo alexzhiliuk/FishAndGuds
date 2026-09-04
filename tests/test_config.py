@@ -27,5 +27,7 @@ def test_public_restaurant_channels_have_expected_defaults():
     assert settings.bot_display_name == "Клуб «Рыба и Гады»"
     assert settings.privacy_policy_url == "https://rybagady.ru/privacy"
     assert settings.booking_url == "https://473113.restoplace.ws/"
+    assert "address=113df861c6829a9c32ff" in settings.booking_restaurant_url
+    assert "address=b10a3a9772e9aa1942e9" in settings.booking_bistro_url
     assert "ryba_i_gady" in settings.delivery_url
     assert settings.contact_phone == "+79818977766"
