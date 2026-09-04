@@ -23,6 +23,7 @@ from app.bot.keyboards.common import (
     profile_keyboard,
     purchases_keyboard,
     restaurant_keyboard,
+    restaurant_button_name,
     restaurant_link_edit_keyboard,
 )
 from app.bot.navigation import clear_inline_keyboard
@@ -35,6 +36,11 @@ def callback_data(markup):
         for button in row
         if button.callback_data
     ]
+
+
+def test_restaurant_button_names_use_public_branding():
+    assert restaurant_button_name("Рыба и гады") == "Ресторан «Рыба и Гады»"
+    assert restaurant_button_name("Бистро Рыба и гады") == "Бистро «Рыба и Гады»"
 
 
 @pytest.mark.asyncio
@@ -545,6 +551,10 @@ async def test_policy_button_sends_same_admin_pdf(monkeypatch):
 def test_admin_can_select_restaurant_and_each_local_link():
     items = [SimpleNamespace(id=5, name="Рыба и гады")]
 
+    assert (
+        admin_restaurants_keyboard(items).inline_keyboard[0][0].text
+        == "Ресторан «Рыба и Гады»"
+    )
     assert callback_data(admin_restaurants_keyboard(items)) == [
         "admin:restaurant:5",
         "admin:back",
@@ -867,6 +877,10 @@ async def test_booking_restaurants_are_parsed_and_open_direct_location_urls(
     assert [row[0].url for row in markup.inline_keyboard[:-1]] == [
         "https://iiko.example.com/bistro-booking",
         "https://admin.example.com/restaurant-booking",
+    ]
+    assert [row[0].text for row in markup.inline_keyboard[:-1]] == [
+        "Бистро «Рыба и Гады»",
+        "Ресторан «Рыба и Гады»",
     ]
     assert callback_data(markup) == ["nav:main"]
 
