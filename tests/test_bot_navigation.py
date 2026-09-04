@@ -94,17 +94,15 @@ async def test_new_screen_does_not_delete_or_edit_previous_photo_message(tmp_pat
 
 
 def test_main_menu_is_inline_and_uses_callback_navigation():
-    markup = main_menu(
-        is_admin=True,
-        delivery_url="https://delivery.example.com",
-        reviews_url="https://reviews.example.com",
-    )
+    markup = main_menu(is_admin=True)
 
     assert isinstance(markup, InlineKeyboardMarkup)
     assert callback_data(markup) == [
         "menu:qr",
         "menu:profile",
         "menu:booking",
+        "menu:delivery",
+        "menu:reviews",
         "menu:contact",
         "menu:admin",
     ]
@@ -113,8 +111,8 @@ def test_main_menu_is_inline_and_uses_callback_navigation():
         "menu:profile",
     ]
     assert markup.inline_keyboard[1][0].callback_data == "menu:booking"
-    assert markup.inline_keyboard[1][1].url == "https://delivery.example.com"
-    assert markup.inline_keyboard[2][0].url == "https://reviews.example.com"
+    assert markup.inline_keyboard[1][1].callback_data == "menu:delivery"
+    assert markup.inline_keyboard[2][0].callback_data == "menu:reviews"
     assert markup.inline_keyboard[0][0].text == "🔲 Мой QR-код"
     assert markup.inline_keyboard[1][0].text == "🍽 Забронировать стол"
 
@@ -208,18 +206,21 @@ async def test_registered_start_opens_menu_without_intermediate_message(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_contact_button_shows_clickable_restaurant_phone():
+async def test_contact_button_shows_clickable_restaurant_phone(monkeypatch):
+    item = SimpleNamespace(id=2, name="Рыба и гады", contact_phone="+79818977766")
+    service = SimpleNamespace(get=AsyncMock(return_value=item))
+    monkeypatch.setattr(user_handlers, "RestaurantService", lambda session: service)
     message = SimpleNamespace(answer=AsyncMock())
-    callback = SimpleNamespace(message=message, answer=AsyncMock())
-
-    await user_handlers.contact_restaurant(
-        callback, SimpleNamespace(contact_phone="+79818977766")
+    callback = SimpleNamespace(
+        data="restaurant:contact:2", message=message, answer=AsyncMock()
     )
+
+    await user_handlers.restaurant_action(callback, object(), SimpleNamespace())
 
     text = message.answer.await_args.args[0]
     assert 'href="tel:+79818977766"' in text
     assert callback_data(message.answer.await_args.kwargs["reply_markup"]) == [
-        "nav:main"
+        "restaurants:contact"
     ]
 
 
@@ -271,18 +272,21 @@ async def test_qr_is_sent_without_an_intermediate_text_message(monkeypatch, sour
     assert FakeLoyaltyService.init_args == (session, iiko, "organization-id")
 
 
-def test_restaurant_admin_text_does_not_expose_internal_system_names():
+def test_restaurant_admin_text_explains_iiko_and_admin_sources():
     item = SimpleNamespace(
         name="Рыба и гады",
         address="Минск",
         website_url=None,
+        booking_url=None,
         delivery_url=None,
         reviews_url=None,
+        contact_phone=None,
     )
 
     text = admin_handlers.restaurant_admin_text(item)
 
-    assert "iiko" not in text.lower()
+    assert "Бронирование из iiko" in text
+    assert "Настройки из админки" in text
     assert "бд" not in text.lower()
 
 
@@ -337,15 +341,67 @@ def test_admin_can_select_restaurant_and_each_local_link():
         "admin:back",
     ]
     assert callback_data(admin_restaurant_links_keyboard(5)) == [
+        "restaurant_link:booking_url:5",
         "restaurant_link:delivery_url:5",
         "restaurant_link:reviews_url:5",
+        "restaurant_link:contact_phone:5",
+        "admin:restaurants",
+    ]
+    assert callback_data(admin_restaurant_links_keyboard(6, allow_delivery=False)) == [
+        "restaurant_link:booking_url:6",
+        "restaurant_link:reviews_url:6",
+        "restaurant_link:contact_phone:6",
         "admin:restaurants",
     ]
 
 
-def test_booking_and_contacts_use_same_iiko_website():
-    assert user_handlers.ACTIONS["booking"][1] == "website_url"
-    assert user_handlers.ACTIONS["contact"][1] == "website_url"
+@pytest.mark.asyncio
+async def test_admin_restaurant_phone_is_normalized_and_saved(monkeypatch):
+    item = SimpleNamespace(
+        id=5,
+        name="Рыба и гады",
+        address="Большая Конюшенная, 5",
+        website_url=None,
+        booking_url=None,
+        delivery_url=None,
+        reviews_url=None,
+        contact_phone="+79818977766",
+        delivery_configurable=True,
+    )
+    service = SimpleNamespace(update_local_link=AsyncMock(return_value=item))
+    monkeypatch.setattr(admin_handlers, "RestaurantService", lambda session: service)
+    state = SimpleNamespace(
+        get_data=AsyncMock(
+            return_value={
+                "restaurant_id": 5,
+                "restaurant_link_field": "contact_phone",
+            }
+        ),
+        clear=AsyncMock(),
+    )
+    message = SimpleNamespace(text="8 (981) 897-77-66", answer=AsyncMock())
+
+    await admin_handlers.restaurant_link_value(message, state, object())
+
+    service.update_local_link.assert_awaited_once_with(
+        5, "contact_phone", "+79818977766"
+    )
+    state.clear.assert_awaited_once_with()
+
+
+def test_booking_prefers_iiko_website_and_falls_back_to_admin():
+    item = SimpleNamespace(
+        website_url="https://iiko.example.com/booking",
+        booking_url="https://admin.example.com/booking",
+    )
+
+    assert user_handlers.restaurant_action_url(item, "booking") == (
+        "https://iiko.example.com/booking"
+    )
+    item.website_url = None
+    assert user_handlers.restaurant_action_url(item, "booking") == (
+        "https://admin.example.com/booking"
+    )
 
 
 def test_sent_mailing_remains_editable_and_resendable():
@@ -561,19 +617,19 @@ async def test_profile_return_from_intermediate_screen_sends_new_message(monkeyp
 @pytest.mark.asyncio
 async def test_restaurant_navigation_always_sends_new_messages(monkeypatch):
     restaurants = [
-        SimpleNamespace(id=7, name="Ресторан", address=None, website_url=None)
+        SimpleNamespace(
+            id=7,
+            name="Ресторан",
+            website_url="https://iiko.example.com/booking",
+            booking_url=None,
+        )
     ]
     service = SimpleNamespace(list_active=AsyncMock(return_value=restaurants))
     monkeypatch.setattr(user_handlers, "RestaurantService", lambda session: service)
     message = SimpleNamespace(photo=None, edit_text=AsyncMock(), answer=AsyncMock())
     callback = SimpleNamespace(data="menu:booking", message=message, answer=AsyncMock())
-    settings = SimpleNamespace(
-        booking_restaurant_url="https://booking.example.com/restaurant",
-        booking_bistro_url="https://booking.example.com/bistro",
-        booking_url="https://booking.example.com",
-    )
 
-    await user_handlers.choose_restaurant_callback(callback, object(), settings)
+    await user_handlers.choose_restaurant_callback(callback, object())
 
     message.answer.assert_awaited_once()
     message.edit_text.assert_not_awaited()
@@ -581,7 +637,7 @@ async def test_restaurant_navigation_always_sends_new_messages(monkeypatch):
     message.edit_text.reset_mock()
     message.answer.reset_mock()
     callback.data = "restaurants:booking"
-    await user_handlers.restaurants_back(callback, object(), settings)
+    await user_handlers.restaurants_back(callback, object())
 
     message.answer.assert_awaited_once()
     message.edit_text.assert_not_awaited()
@@ -595,32 +651,27 @@ async def test_booking_restaurants_are_parsed_and_open_direct_location_urls(
         SimpleNamespace(
             id=1,
             name="Бистро Рыба и гады",
-            address="Итальянская, 14/16",
-            website_url=None,
+            website_url="https://iiko.example.com/bistro-booking",
+            booking_url="https://admin.example.com/unused",
         ),
         SimpleNamespace(
             id=2,
             name="Рыба и гады",
-            address="Большая Конюшенная, 5 Ресторан",
             website_url=None,
+            booking_url="https://admin.example.com/restaurant-booking",
         ),
     ]
     service = SimpleNamespace(list_active=AsyncMock(return_value=restaurants))
     monkeypatch.setattr(user_handlers, "RestaurantService", lambda session: service)
     message = SimpleNamespace(answer=AsyncMock())
-    settings = SimpleNamespace(
-        booking_restaurant_url="https://booking.example.com/restaurant",
-        booking_bistro_url="https://booking.example.com/bistro",
-        booking_url="https://booking.example.com",
-    )
 
-    await user_handlers.send_restaurants(message, object(), "booking", settings)
+    await user_handlers.send_restaurants(message, object(), "booking")
 
     service.list_active.assert_awaited_once_with()
     markup = message.answer.await_args.kwargs["reply_markup"]
     assert [row[0].url for row in markup.inline_keyboard[:-1]] == [
-        "https://booking.example.com/bistro",
-        "https://booking.example.com/restaurant",
+        "https://iiko.example.com/bistro-booking",
+        "https://admin.example.com/restaurant-booking",
     ]
     assert callback_data(markup) == ["nav:main"]
 

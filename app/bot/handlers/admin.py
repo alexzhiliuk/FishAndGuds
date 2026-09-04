@@ -32,13 +32,20 @@ from app.bot.states import (
     RestaurantLinkEdit,
 )
 from app.config import Settings
-from app.services import ApplicationSettingsService, MailingService, RestaurantService
+from app.services import (
+    ApplicationSettingsService,
+    MailingService,
+    PhoneNormalizationService,
+    RestaurantService,
+)
 
 router = Router(name="admin")
 logger = logging.getLogger(__name__)
 RESTAURANT_LINK_FIELDS = {
+    "booking_url": "🍽 Бронирование, если iiko не передал ссылку",
     "delivery_url": "🛵 Доставка",
     "reviews_url": "⭐ Отзывы / Яндекс Карты",
+    "contact_phone": "📞 Телефон",
 }
 APPLICATION_LINK_FIELDS = {
     ApplicationSettingsService.PRIVACY_POLICY_URL: "🔒 Политика обработки персональных данных",
@@ -184,15 +191,13 @@ def restaurant_admin_text(item) -> str:
         f"🏪 {item.name}",
         item.address or "Адрес не указан",
         "",
-        f"🌐 Сайт ресторана: {item.website_url or 'не указан'}",
+        f"🌐 Бронирование из iiko: {item.website_url or 'не передано'}",
         "",
-        "Дополнительные ссылки:",
+        "Настройки из админки:",
     ]
     for field, label in RESTAURANT_LINK_FIELDS.items():
         lines.append(f"{label}: {getattr(item, field) or 'не задана'}")
-    lines.append(
-        "\nДополнительные ссылки настраиваются отдельно для каждого ресторана."
-    )
+    lines.append("\nЭти значения настраиваются отдельно для каждого ресторана.")
     return "\n".join(lines)
 
 
@@ -237,13 +242,18 @@ async def admin_restaurant(
     await answer_with_buttons(
         callback.message,
         restaurant_admin_text(item),
-        reply_markup=admin_restaurant_links_keyboard(item.id),
+        reply_markup=admin_restaurant_links_keyboard(
+            item.id, allow_delivery=item.delivery_configurable
+        ),
     )
 
 
 @router.callback_query(F.data.startswith("restaurant_link:"))
 async def restaurant_link_start(
-    callback: CallbackQuery, state: FSMContext, settings: Settings
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
 ):
     if await deny(callback, settings):
         return
@@ -251,13 +261,30 @@ async def restaurant_link_start(
     if field not in RESTAURANT_LINK_FIELDS:
         await callback.answer("Неизвестное поле", show_alert=True)
         return
+    if field == "delivery_url":
+        item = await RestaurantService(session).get(int(item_id))
+        if item is None or not item.delivery_configurable:
+            await callback.answer(
+                "Доставка настраивается только для ресторана", show_alert=True
+            )
+            return
     await callback.answer()
     await state.update_data(restaurant_id=int(item_id), restaurant_link_field=field)
     await state.set_state(RestaurantLinkEdit.value)
+    if field == "contact_phone":
+        instruction = (
+            f"Отправьте номер для раздела «{RESTAURANT_LINK_FIELDS[field]}».\n\n"
+            "Чтобы очистить поле, напишите «удалить»."
+        )
+    else:
+        instruction = (
+            f"Отправьте ссылку для раздела «{RESTAURANT_LINK_FIELDS[field]}».\n\n"
+            "Разрешены ссылки http:// и https://. Чтобы очистить поле, "
+            "напишите «удалить»."
+        )
     await answer_with_buttons(
         callback.message,
-        f"Отправьте ссылку для раздела «{RESTAURANT_LINK_FIELDS[field]}».\n\n"
-        "Разрешены ссылки http:// и https://. Чтобы очистить поле, напишите «удалить».",
+        instruction,
         reply_markup=back_keyboard(f"admin:restaurant:{item_id}"),
     )
 
@@ -267,8 +294,21 @@ async def restaurant_link_value(
     message: Message, state: FSMContext, session: AsyncSession
 ):
     raw_value = (message.text or "").strip()
+    data = await state.get_data()
+    field = data["restaurant_link_field"]
     if raw_value.lower() in {"удалить", "очистить", "нет", "-"}:
         value = None
+    elif field == "contact_phone":
+        try:
+            value = PhoneNormalizationService.normalize(raw_value)
+        except ValueError:
+            await answer_with_buttons(
+                message,
+                "Некорректный номер телефона. Отправьте номер с кодом страны "
+                "или напишите «удалить».",
+                reply_markup=back_keyboard(f"admin:restaurant:{data['restaurant_id']}"),
+            )
+            return
     else:
         parsed = urlparse(raw_value)
         if (
@@ -276,7 +316,6 @@ async def restaurant_link_value(
             or parsed.scheme not in {"http", "https"}
             or not parsed.netloc
         ):
-            data = await state.get_data()
             await answer_with_buttons(
                 message,
                 "Некорректная ссылка. Отправьте полный адрес, начинающийся с https://, или напишите «удалить».",
@@ -284,15 +323,16 @@ async def restaurant_link_value(
             )
             return
         value = raw_value
-    data = await state.get_data()
     item = await RestaurantService(session).update_local_link(
-        data["restaurant_id"], data["restaurant_link_field"], value
+        data["restaurant_id"], field, value
     )
     await state.clear()
     await answer_with_buttons(
         message,
         "Ссылка сохранена.\n\n" + restaurant_admin_text(item),
-        reply_markup=admin_restaurant_links_keyboard(item.id),
+        reply_markup=admin_restaurant_links_keyboard(
+            item.id, allow_delivery=item.delivery_configurable
+        ),
     )
 
 

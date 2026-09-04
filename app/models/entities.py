@@ -117,11 +117,17 @@ class Restaurant(Base, TimestampMixin):
     longitude: Mapped[float | None] = mapped_column(Float)
     code: Mapped[str | None] = mapped_column(String(100))
     inn: Mapped[str | None] = mapped_column(String(32))
+    booking_url: Mapped[str | None] = mapped_column(String(500))
     delivery_url: Mapped[str | None] = mapped_column(String(500))
     reviews_url: Mapped[str | None] = mapped_column(String(500))
+    contact_phone: Mapped[str | None] = mapped_column(String(32))
     website_url: Mapped[str | None] = mapped_column(String(500))
     image_name: Mapped[str | None] = mapped_column(String(100))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    @property
+    def delivery_configurable(self) -> bool:
+        return self.name.strip().casefold() == "рыба и гады"
 
 
 class LoyaltyTransaction(Base):

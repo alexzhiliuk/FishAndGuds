@@ -31,17 +31,7 @@ def registration_web_app_keyboard(url: str):
     )
 
 
-def main_menu(
-    is_admin: bool = False,
-    *,
-    delivery_url: str | None = None,
-    reviews_url: str | None = None,
-):
-    def external_or_callback(text: str, url: str | None, callback_data: str):
-        if url:
-            return InlineKeyboardButton(text=text, url=url)
-        return InlineKeyboardButton(text=text, callback_data=callback_data)
-
+def main_menu(is_admin: bool = False):
     rows = [
         [
             InlineKeyboardButton(text="🔲 Мой QR-код", callback_data="menu:qr"),
@@ -53,10 +43,14 @@ def main_menu(
             InlineKeyboardButton(
                 text="🍽 Забронировать стол", callback_data="menu:booking"
             ),
-            external_or_callback("🛵 Заказать доставку", delivery_url, "menu:delivery"),
+            InlineKeyboardButton(
+                text="🛵 Заказать доставку", callback_data="menu:delivery"
+            ),
         ],
         [
-            external_or_callback("⭐ Оставить отзыв", reviews_url, "menu:reviews"),
+            InlineKeyboardButton(
+                text="⭐ Оставить отзыв", callback_data="menu:reviews"
+            ),
             InlineKeyboardButton(
                 text="📞 Связаться с рестораном", callback_data="menu:contact"
             ),
@@ -221,19 +215,36 @@ def admin_restaurants_keyboard(items):
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def admin_restaurant_links_keyboard(item_id: int):
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def admin_restaurant_links_keyboard(item_id: int, *, allow_delivery: bool = True):
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="🍽 Бронирование (резерв)",
+                callback_data=f"restaurant_link:booking_url:{item_id}",
+            )
+        ],
+    ]
+    if allow_delivery:
+        rows.append(
             [
                 InlineKeyboardButton(
                     text="🛵 Доставка",
                     callback_data=f"restaurant_link:delivery_url:{item_id}",
                 )
-            ],
+            ]
+        )
+    rows.extend(
+        [
             [
                 InlineKeyboardButton(
                     text="⭐ Отзывы / Яндекс Карты",
                     callback_data=f"restaurant_link:reviews_url:{item_id}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📞 Телефон",
+                    callback_data=f"restaurant_link:contact_phone:{item_id}",
                 )
             ],
             [
@@ -243,6 +254,7 @@ def admin_restaurant_links_keyboard(item_id: int):
             ],
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def mailing_list_keyboard(items, page: int, has_next: bool):

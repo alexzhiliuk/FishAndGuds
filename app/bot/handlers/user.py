@@ -47,7 +47,7 @@ ACTIONS = {
     "booking": ("🍽 Перейти к бронированию", "website_url", "🍽 Бронирование"),
     "delivery": ("🛵 Заказать доставку", "delivery_url", "🛵 Доставка"),
     "reviews": ("⭐ Открыть Яндекс.Карты", "reviews_url", "⭐ Отзывы"),
-    "contact": ("🌐 Открыть сайт ресторана", "website_url", "📞 Контакты"),
+    "contact": ("📞 Позвонить", "contact_phone", "📞 Контакты"),
 }
 RESTAURANT_PROMPTS = {
     "booking": "Где хотите забронировать стол?",
@@ -111,11 +111,7 @@ async def send_main_menu(
     await answer_with_buttons(
         message,
         text,
-        reply_markup=main_menu(
-            is_admin,
-            delivery_url=settings.delivery_url,
-            reviews_url=settings.reviews_url,
-        ),
+        reply_markup=main_menu(is_admin),
         parse_mode="HTML",
     )
 
@@ -174,26 +170,25 @@ async def send_profile(
     await answer_with_buttons(message, text, reply_markup=profile_keyboard())
 
 
-def restaurant_action_url(item, action: str, settings: Settings) -> str | None:
+def restaurant_action_url(item, action: str) -> str | None:
     if action == "booking":
-        identity = f"{item.name} {getattr(item, 'address', None) or ''}".casefold()
-        if "бистро" in identity or "итальянск" in identity:
-            return settings.booking_bistro_url
-        if "ресторан" in identity or "конюшенн" in identity:
-            return settings.booking_restaurant_url
-        return getattr(item, "website_url", None) or settings.booking_url
+        return item.website_url or item.booking_url
+    if action == "contact":
+        return None
     return getattr(item, ACTIONS[action][1])
 
 
-async def send_restaurants(
-    message: Message, session: AsyncSession, action: str, settings: Settings
-):
+async def send_restaurants(message: Message, session: AsyncSession, action: str):
     items = await RestaurantService(session).list_active()
-    urls_by_id = {
-        item.id: restaurant_action_url(item, action, settings) for item in items
-    }
+    urls_by_id = {item.id: restaurant_action_url(item, action) for item in items}
+    if action == "contact":
+        items = [item for item in items if item.contact_phone]
+    else:
+        items = [item for item in items if urls_by_id[item.id]]
     kwargs = {"reply_markup": restaurant_keyboard(items, action, urls_by_id)}
     text = RESTAURANT_PROMPTS[action]
+    if not items:
+        text += "\n\nДанные пока не настроены."
     await answer_with_buttons(message, text, **kwargs)
 
 
@@ -440,45 +435,29 @@ async def removed_notifications(callback: CallbackQuery):
         }
     )
 )
-async def choose_restaurant(
-    message: Message, session: AsyncSession, settings: Settings
-):
+async def choose_restaurant(message: Message, session: AsyncSession):
     action = {
         "🍽 Забронировать": "booking",
         "🛵 Заказать доставку": "delivery",
         "⭐ Оставить отзыв": "reviews",
         "📞 Связаться с рестораном": "contact",
     }[message.text]
-    await send_restaurants(message, session, action, settings)
+    await send_restaurants(message, session, action)
 
 
-@router.callback_query(F.data.in_({"menu:booking", "menu:delivery", "menu:reviews"}))
-async def choose_restaurant_callback(
-    callback: CallbackQuery, session: AsyncSession, settings: Settings
-):
+@router.callback_query(
+    F.data.in_({"menu:booking", "menu:delivery", "menu:reviews", "menu:contact"})
+)
+async def choose_restaurant_callback(callback: CallbackQuery, session: AsyncSession):
     action = callback.data.split(":", 1)[1]
-    await send_restaurants(callback.message, session, action, settings)
-    await callback.answer()
-
-
-@router.callback_query(F.data == "menu:contact")
-async def contact_restaurant(callback: CallbackQuery, settings: Settings):
-    phone = escape(settings.contact_phone)
-    await answer_with_buttons(
-        callback.message,
-        f'📞 Связаться с рестораном\n\n<a href="tel:{phone}">{phone}</a>',
-        reply_markup=back_keyboard("nav:main"),
-        parse_mode="HTML",
-    )
+    await send_restaurants(callback.message, session, action)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("restaurants:"))
-async def restaurants_back(
-    callback: CallbackQuery, session: AsyncSession, settings: Settings
-):
+async def restaurants_back(callback: CallbackQuery, session: AsyncSession):
     action = callback.data.split(":", 1)[1]
-    await send_restaurants(callback.message, session, action, settings)
+    await send_restaurants(callback.message, session, action)
     await callback.answer()
 
 
@@ -488,12 +467,25 @@ async def restaurant_action(
 ):
     _, action, item_id = callback.data.split(":")
     item = await RestaurantService(session).get(int(item_id))
-    label, field, title = ACTIONS[action]
+    label, _, title = ACTIONS[action]
     if not item:
         await callback.answer("Ресторан не найден", show_alert=True)
         return
+    if action == "contact":
+        if not item.contact_phone:
+            await callback.answer("Телефон временно недоступен", show_alert=True)
+            return
+        phone = escape(item.contact_phone)
+        await answer_with_buttons(
+            callback.message,
+            f'{title}\n\n{escape(item.name)}\n<a href="tel:{phone}">{phone}</a>',
+            reply_markup=back_keyboard("restaurants:contact"),
+            parse_mode="HTML",
+        )
+        await callback.answer()
+        return
     text = f"{title}\n\n{item.name}\n📍 {item.address}"
-    url = getattr(item, field)
+    url = restaurant_action_url(item, action)
     if not url:
         text += "\n\nСсылка временно недоступна."
     await send_visual(

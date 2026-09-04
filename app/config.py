@@ -16,16 +16,6 @@ class Settings(BaseSettings):
     telegram_webhook_path: str = "/telegram/webhook"
     telegram_webhook_secret: str = ""
     privacy_policy_url: str = "https://rybagady.ru/privacy"
-    booking_url: str = "https://473113.restoplace.ws/"
-    booking_restaurant_url: str = (
-        "https://473113.restoplace.ws/?address=113df861c6829a9c32ff&nostep=1"
-    )
-    booking_bistro_url: str = (
-        "https://473113.restoplace.ws/?address=b10a3a9772e9aa1942e9&nostep=1"
-    )
-    delivery_url: str = "https://eda.yandex.ru/restaurant/ryba_i_gady"
-    reviews_url: str = "https://yandex.ru/maps/org/ryba_i_gady/88547327027/reviews/"
-    contact_phone: str = "+79818977766"
     redis_url: str = "redis://redis:6379/0"
     iiko_organizations_cache_ttl_seconds: int = 1800
     iiko_base_url: str = "https://api-ru.iiko.services"
