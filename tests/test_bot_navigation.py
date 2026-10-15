@@ -45,9 +45,7 @@ async def test_immediate_mailing_includes_admins_and_shows_breakdown(monkeypatch
         sent_count=12,
         failed_count=0,
         status=RunStatus.sent,
-        audience_summary=dict(
-            total_users=33, included_admins=1, excluded_inactive=1
-        ),
+        audience_summary=dict(total_users=33, included_admins=1, excluded_inactive=1),
     )
     service = SimpleNamespace(send=AsyncMock(return_value=run))
     monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)

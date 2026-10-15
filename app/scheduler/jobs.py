@@ -88,9 +88,7 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
                             f"🎉 {user.first_name}, {holiday_text}",
                         )
                     except Exception:
-                        logger.exception(
-                            "Holiday delivery failed user_id=%s", user.id
-                        )
+                        logger.exception("Holiday delivery failed user_id=%s", user.id)
                 for telegram_id in sorted(set(settings.admin_ids) - notified_ids):
                     try:
                         await bot.send_message(telegram_id, f"🎉 {holiday_text}")

@@ -8,9 +8,7 @@ def test_report_explains_audience_and_handles_legacy_runs():
         sent_count=12,
         failed_count=0,
         status=RunStatus.sent,
-        audience_summary=dict(
-            total_users=33, included_admins=1, excluded_inactive=1
-        ),
+        audience_summary=dict(total_users=33, included_admins=1, excluded_inactive=1),
     )
     report = mailing_report(run)
     assert "Пользователей в базе: 33" in report
