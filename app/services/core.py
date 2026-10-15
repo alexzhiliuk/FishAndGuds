@@ -275,35 +275,6 @@ class RestaurantService:
         return item
 
 
-class NotificationService:
-    FIELDS = {
-        "promotions": "promotions_enabled",
-        "news": "news_enabled",
-        "holidays": "holidays_enabled",
-        "sms": "sms_enabled",
-        "push": "push_enabled",
-        "email": "email_enabled",
-    }
-
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
-    async def get_settings(self, telegram_id: int):
-        user = await UserRepository(self.session).by_telegram_id(telegram_id)
-        return user.notification_settings if user else None
-
-    async def toggle(self, telegram_id: int, key: str):
-        user = await UserRepository(self.session).by_telegram_id(telegram_id)
-        field = self.FIELDS[key]
-        setattr(
-            user.notification_settings,
-            field,
-            not getattr(user.notification_settings, field),
-        )
-        await self.session.commit()
-        return user.notification_settings
-
-
 class SyncService:
     def __init__(
         self,
@@ -486,39 +457,34 @@ class MailingService:
         self,
         item_id: int,
         sender: Callable[[int, str, str | None], Awaitable[None]],
-        excluded_telegram_ids: Collection[int] = (),
+        include_telegram_ids: Collection[int] = (),
     ):
         repo = MailingRepository(self.session)
         item = await repo.get(item_id)
         if not item:
             raise ValueError("Рассылка не найдена")
-        excluded = set(excluded_telegram_ids)
         audience = await UserRepository(self.session).mailing_audience()
+        admin_ids = set(include_telegram_ids)
+        recipients = [
+            user.telegram_id
+            for user in audience
+            if user.is_active or user.telegram_id in admin_ids
+        ]
+        recipient_ids = set(recipients)
+        recipients.extend(sorted(admin_ids - recipient_ids))
         summary = dict(
             total_users=len(audience),
-            excluded_admins=0,
-            excluded_inactive=0,
-            excluded_push=0,
+            included_admins=len(admin_ids),
+            excluded_inactive=sum(
+                not user.is_active and user.telegram_id not in admin_ids
+                for user in audience
+            ),
         )
-        users = []
-        for user in audience:
-            # Exclusive categories: every user appears exactly once in the report.
-            if user.telegram_id in excluded:
-                summary["excluded_admins"] += 1
-            elif not user.is_active:
-                summary["excluded_inactive"] += 1
-            elif (
-                user.notification_settings
-                and not user.notification_settings.push_enabled
-            ):
-                summary["excluded_push"] += 1
-            else:
-                users.append(user)
         now = datetime.now(timezone.utc)
         item.status = MailingStatus.sending
         run = await repo.add_run(
             mailing_id=item.id,
-            total_count=len(users),
+            total_count=len(recipients),
             audience_summary=summary,
             sent_count=0,
             failed_count=0,
@@ -527,13 +493,15 @@ class MailingService:
         )
         await self.session.commit()
         try:
-            for user in users:
+            for telegram_id in recipients:
                 try:
-                    await sender(user.telegram_id, item.text, item.image_file_id)
+                    await sender(telegram_id, item.text, item.image_file_id)
                     run.sent_count += 1
                 except Exception:
                     run.failed_count += 1
-                    logger.exception("Mailing delivery failed user_id=%s", user.id)
+                    logger.exception(
+                        "Mailing delivery failed telegram_id=%s", telegram_id
+                    )
             run.status = RunStatus.sent
             item.status = MailingStatus.sent
         except Exception as exc:

@@ -192,11 +192,7 @@ class NotificationSettings(Base):
     user_id: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), unique=True
     )
-    promotions_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    news_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    holidays_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     sms_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
-    push_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     email_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -9,15 +9,20 @@ def test_report_explains_audience_and_handles_legacy_runs():
         failed_count=0,
         status=RunStatus.sent,
         audience_summary=dict(
-            total_users=33, excluded_admins=1, excluded_inactive=1, excluded_push=19
+            total_users=33, included_admins=1, excluded_inactive=1
         ),
     )
     report = mailing_report(run)
     assert "Пользователей в базе: 33" in report
-    assert "Исключено администраторов: 1" in report
-    assert "Неактивных: 1" in report
-    assert "Отключили Telegram-рассылки: 19" in report
+    assert "Администраторов включено: 1" in report
+    assert "Неактивных исключено: 1" in report
     assert "Получателей: 12" in report
+    run.audience_summary = dict(
+        total_users=33, excluded_admins=1, excluded_inactive=1, excluded_push=19
+    )
+    legacy_report = mailing_report(run)
+    assert "Исключено администраторов: 1 (в старой рассылке)" in legacy_report
+    assert "Отключили Telegram-рассылки: 19 (в старой рассылке)" in legacy_report
     run.audience_summary = None
     assert "Пользователей в базе" not in mailing_report(run)
     assert "Получателей: 12" in mailing_report(run)

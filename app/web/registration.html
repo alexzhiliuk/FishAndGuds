@@ -83,7 +83,6 @@
       <legend>Я хочу получать информацию</legend>
       <div class="choices">
         <label class="choice"><input name="sms_enabled" type="checkbox" checked>СМС</label>
-        <label class="choice"><input name="push_enabled" type="checkbox" checked>Получать рассылки в Telegram</label>
         <label class="choice"><input name="email_enabled" type="checkbox" checked>E-mail</label>
       </div>
     </fieldset>
@@ -229,7 +228,6 @@
       gender: data.get('gender'),
       email: data.get('email').trim() || null,
       sms_enabled: data.get('sms_enabled') === 'on',
-      push_enabled: data.get('push_enabled') === 'on',
       email_enabled: data.get('email_enabled') === 'on',
       consent: data.get('consent') === 'on'
     }));

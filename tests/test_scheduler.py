@@ -40,7 +40,7 @@ async def test_scheduler_has_no_background_user_transaction_sync():
     }
 
 
-async def test_scheduled_mailings_keep_admin_exclusion(monkeypatch):
+async def test_scheduled_mailings_include_admins(monkeypatch):
     session = object()
 
     @asynccontextmanager
@@ -60,4 +60,4 @@ async def test_scheduled_mailings_keep_admin_exclusion(monkeypatch):
     await scheduler.get_job("mailings").func()
     service.send.assert_awaited_once()
     assert service.send.await_args.args[0] == 7
-    assert service.send.await_args.kwargs["excluded_telegram_ids"] == (42,)
+    assert service.send.await_args.kwargs["include_telegram_ids"] == (42,)

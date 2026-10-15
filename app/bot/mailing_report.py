@@ -11,15 +11,20 @@ def mailing_report(run: MailingRun) -> str:
     lines = [title, ""]
     summary = run.audience_summary
     if summary is not None:
-        lines.extend(
-            [
-                f"Пользователей в базе: {summary['total_users']}",
-                f"Исключено администраторов: {summary['excluded_admins']}",
-                f"Неактивных: {summary['excluded_inactive']}",
-                f"Отключили Telegram-рассылки: {summary['excluded_push']}",
-                "",
-            ]
-        )
+        lines.append(f"Пользователей в базе: {summary['total_users']}")
+        if "included_admins" in summary:
+            lines.append(f"Администраторов включено: {summary['included_admins']}")
+        elif summary.get("excluded_admins"):
+            lines.append(
+                f"Исключено администраторов: {summary['excluded_admins']} (в старой рассылке)"
+            )
+        if "excluded_inactive" in summary:
+            lines.append(f"Неактивных исключено: {summary['excluded_inactive']}")
+        if summary.get("excluded_push"):
+            lines.append(
+                f"Отключили Telegram-рассылки: {summary['excluded_push']} (в старой рассылке)"
+            )
+        lines.append("")
     lines.extend(
         [
             f"Получателей: {run.total_count}",

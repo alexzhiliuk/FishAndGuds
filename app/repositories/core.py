@@ -53,7 +53,6 @@ class UserRepository:
         consent_at: datetime | None = None,
         sync_status: IikoSyncStatus = IikoSyncStatus.pending,
         sms_enabled: bool = True,
-        push_enabled: bool = True,
         email_enabled: bool = True,
     ):
         user = User(
@@ -72,7 +71,6 @@ class UserRepository:
         )
         user.notification_settings = NotificationSettings(
             sms_enabled=sms_enabled,
-            push_enabled=push_enabled,
             email_enabled=email_enabled,
         )
         self.session.add(user)
@@ -134,10 +132,8 @@ class UserRepository:
     async def birthdays(self, day: int, month: int):
         stmt = (
             select(User)
-            .join(NotificationSettings)
             .where(
                 User.is_active.is_(True),
-                NotificationSettings.holidays_enabled.is_(True),
                 func.extract("day", User.birthday) == day,
                 func.extract("month", User.birthday) == month,
             )

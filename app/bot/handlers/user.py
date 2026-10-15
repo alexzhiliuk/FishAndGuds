@@ -309,7 +309,6 @@ async def registration_complete(
         gender=form.gender,
         email=form.email,
         sms_enabled=form.sms_enabled,
-        push_enabled=form.push_enabled,
         email_enabled=form.email_enabled,
         consent=form.consent,
     )

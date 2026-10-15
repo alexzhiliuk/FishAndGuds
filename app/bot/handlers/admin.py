@@ -653,7 +653,7 @@ async def send_now(
     run = await MailingService(session).send(
         item_id,
         lambda uid, text, image: telegram_sender(bot, settings, uid, text, image),
-        excluded_telegram_ids=settings.admin_ids,
+        include_telegram_ids=settings.admin_ids,
     )
     await callback.message.answer(mailing_report(run))
 

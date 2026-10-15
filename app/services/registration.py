@@ -25,7 +25,6 @@ class RegistrationSubmission(BaseModel):
     gender: Literal["male", "female"]
     email: str | None = Field(default=None, max_length=254)
     sms_enabled: bool = True
-    push_enabled: bool = True
     email_enabled: bool = True
     consent: bool
 
@@ -156,7 +155,6 @@ class RegistrationService:
         consent: bool,
         gender: str | None = None,
         sms_enabled: bool = True,
-        push_enabled: bool = True,
         email_enabled: bool = True,
     ):
         if not consent:
@@ -179,7 +177,6 @@ class RegistrationService:
             consent_at=datetime.now(timezone.utc),
             sync_status=IikoSyncStatus.pending,
             sms_enabled=sms_enabled,
-            push_enabled=push_enabled,
             email_enabled=email_enabled,
         )
         await self.session.commit()

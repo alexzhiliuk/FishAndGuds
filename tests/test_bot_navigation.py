@@ -39,14 +39,14 @@ def callback_data(markup):
     ]
 
 
-async def test_immediate_mailing_excludes_admins_and_shows_breakdown(monkeypatch):
+async def test_immediate_mailing_includes_admins_and_shows_breakdown(monkeypatch):
     run = MailingRun(
         total_count=12,
         sent_count=12,
         failed_count=0,
         status=RunStatus.sent,
         audience_summary=dict(
-            total_users=33, excluded_admins=1, excluded_inactive=1, excluded_push=19
+            total_users=33, included_admins=1, excluded_inactive=1
         ),
     )
     service = SimpleNamespace(send=AsyncMock(return_value=run))
@@ -62,9 +62,10 @@ async def test_immediate_mailing_excludes_admins_and_shows_breakdown(monkeypatch
         callback, object(), object(), SimpleNamespace(admin_ids=(42,))
     )
     service.send.assert_awaited_once()
-    assert service.send.await_args.kwargs["excluded_telegram_ids"] == (42,)
+    assert service.send.await_args.kwargs["include_telegram_ids"] == (42,)
     report = callback.message.answer.await_args.args[0]
     assert "Пользователей в базе: 33" in report
+    assert "Администраторов включено: 1" in report
     assert "Получателей: 12" in report
 
 
