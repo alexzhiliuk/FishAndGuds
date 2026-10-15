@@ -360,6 +360,7 @@ class LoyaltySyncService:
         if highest:
             user.loyalty_account.last_transaction_revision = highest.revision
             user.loyalty_account.last_transaction_id = highest.id
+        user.loyalty_account.transactions_synced_at = datetime.now(timezone.utc)
         await self.session.commit()
         logger.info(
             "Initial loyalty sync user_id=%s iiko_customer_id=%s imported=%s",
@@ -393,6 +394,7 @@ class LoyaltySyncService:
             )
             if len(rows) < self.page_size or old_cursor == (revision, last_id):
                 break
+        account.transactions_synced_at = datetime.now(timezone.utc)
         await self.session.commit()
         logger.info(
             "Revision loyalty sync user_id=%s iiko_customer_id=%s imported=%s revision=%s",

@@ -27,6 +27,7 @@ from app.bot.keyboards.common import (
     restaurant_link_edit_keyboard,
 )
 from app.bot.navigation import clear_inline_keyboard
+from app.models.entities import MailingRun, RunStatus
 
 
 def callback_data(markup):
@@ -36,6 +37,67 @@ def callback_data(markup):
         for button in row
         if button.callback_data
     ]
+
+
+async def test_immediate_mailing_excludes_admins_and_shows_breakdown(monkeypatch):
+    run = MailingRun(
+        total_count=12,
+        sent_count=12,
+        failed_count=0,
+        status=RunStatus.sent,
+        audience_summary=dict(
+            total_users=33, excluded_admins=1, excluded_inactive=1, excluded_push=19
+        ),
+    )
+    service = SimpleNamespace(send=AsyncMock(return_value=run))
+    monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
+    monkeypatch.setattr(admin_handlers, "clear_inline_keyboard", AsyncMock())
+    callback = SimpleNamespace(
+        data="mail:send:7",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+    await admin_handlers.send_now(
+        callback, object(), object(), SimpleNamespace(admin_ids=(42,))
+    )
+    service.send.assert_awaited_once()
+    assert service.send.await_args.kwargs["excluded_telegram_ids"] == (42,)
+    report = callback.message.answer.await_args.args[0]
+    assert "Пользователей в базе: 33" in report
+    assert "Получателей: 12" in report
+
+
+async def test_open_mailing_shows_latest_saved_report(monkeypatch):
+    from datetime import timezone
+
+    runs = [
+        MailingRun(
+            id=number,
+            total_count=number,
+            sent_count=number,
+            failed_count=0,
+            status=RunStatus.sent,
+            finished_at=datetime.now(timezone.utc),
+        )
+        for number in (2, 1)
+    ]
+    item = SimpleNamespace(id=7, runs=runs)
+    service = SimpleNamespace(get=AsyncMock(return_value=item))
+    preview = AsyncMock()
+    monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
+    monkeypatch.setattr(admin_handlers, "send_mailing_preview", preview)
+    callback = SimpleNamespace(
+        data="mail:open:7:0",
+        from_user=SimpleNamespace(id=42),
+        answer=AsyncMock(),
+        message=SimpleNamespace(answer=AsyncMock()),
+    )
+    await admin_handlers.open_mailing(
+        callback, object(), SimpleNamespace(admin_ids=(42,))
+    )
+    preview.assert_awaited_once()
+    assert "Получателей: 2" in callback.message.answer.await_args.args[0]
 
 
 def test_restaurant_button_names_use_public_branding():
@@ -819,6 +881,44 @@ async def test_profile_return_from_intermediate_screen_sends_new_message(monkeyp
     send_profile.assert_awaited_once_with(callback.message, 42, session, settings, iiko)
 
 
+async def test_purchase_callback_refreshes_the_requesting_user_and_acknowledges_first(
+    monkeypatch,
+):
+    callback = SimpleNamespace(
+        data="purchases:1",
+        from_user=SimpleNamespace(id=42),
+        message=SimpleNamespace(answer=AsyncMock()),
+        answer=AsyncMock(),
+    )
+
+    async def page_for_telegram(uid, page):
+        callback.answer.assert_awaited_once()
+        assert (uid, page) == (42, 1)
+        return [], False
+
+    service = SimpleNamespace(
+        page_for_telegram=AsyncMock(side_effect=page_for_telegram)
+    )
+    constructor_calls = []
+
+    def make_service(*args, **kwargs):
+        constructor_calls.append((args, kwargs))
+        return service
+
+    monkeypatch.setattr(user_handlers, "PurchaseService", make_service)
+    monkeypatch.setattr(user_handlers, "answer_with_buttons", AsyncMock())
+    session, iiko = object(), object()
+    settings = SimpleNamespace(
+        iiko_default_organization_id="org",
+        iiko_transaction_history_days=365,
+        iiko_transaction_page_size=100,
+    )
+    await user_handlers.purchases(callback, session, settings, iiko)
+    assert constructor_calls == [
+        ((session, iiko, "org"), dict(history_days=365, page_size=100))
+    ]
+
+
 @pytest.mark.asyncio
 async def test_restaurant_navigation_always_sends_new_messages(monkeypatch):
     restaurants = [
@@ -946,11 +1046,11 @@ async def test_purchase_back_sends_new_profile(monkeypatch):
         message=SimpleNamespace(),
         answer=AsyncMock(),
     )
-    session, settings = object(), SimpleNamespace()
+    session, settings, iiko = object(), SimpleNamespace(), object()
 
-    await user_handlers.purchases(callback, session, settings)
+    await user_handlers.purchases(callback, session, settings, iiko)
 
-    send_profile.assert_awaited_once_with(callback.message, 42, session, settings)
+    send_profile.assert_awaited_once_with(callback.message, 42, session, settings, iiko)
 
 
 @pytest.mark.parametrize("action", ["booking", "delivery", "reviews", "contact"])

@@ -22,6 +22,7 @@ from app.bot.keyboards.common import (
     restaurant_link_edit_keyboard,
 )
 from app.bot.media import resolve_mailing_photo
+from app.bot.mailing_report import mailing_report
 from app.bot.navigation import (
     answer_photo_with_buttons,
     answer_with_buttons,
@@ -546,6 +547,10 @@ async def open_mailing(
         await callback.answer("Рассылка не найдена", show_alert=True)
         return
     await send_mailing_preview(callback.message, item, settings, int(page))
+    if item.runs:
+        latest = max(item.runs, key=lambda run: run.id)
+        if latest.finished_at is not None:
+            await callback.message.answer(mailing_report(latest))
     await callback.answer()
 
 
@@ -650,9 +655,7 @@ async def send_now(
         lambda uid, text, image: telegram_sender(bot, settings, uid, text, image),
         excluded_telegram_ids=settings.admin_ids,
     )
-    await callback.message.answer(
-        f"Рассылка завершена.\n\nПолучателей: {run.total_count}\n✅ Отправлено: {run.sent_count}\n❌ Ошибок: {run.failed_count}"
-    )
+    await callback.message.answer(mailing_report(run))
 
 
 @router.callback_query(F.data.startswith("mail:schedule:"))

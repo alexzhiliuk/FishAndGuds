@@ -91,6 +91,32 @@ class UserRepository:
         stmt = select(User).where(User.is_active.is_(True)).options(*self._loaded())
         return list((await self.session.scalars(stmt)).all())
 
+    async def active_ids(self):
+        return list(
+            (
+                await self.session.scalars(
+                    select(User.id).where(User.is_active.is_(True)).order_by(User.id)
+                )
+            ).all()
+        )
+
+    async def by_id(self, user_id: int, *, refresh: bool = False):
+        return await self.session.scalar(
+            select(User)
+            .where(User.id == user_id)
+            .options(*self._loaded())
+            .execution_options(populate_existing=refresh)
+        )
+
+    async def mailing_audience(self):
+        return list(
+            (
+                await self.session.scalars(
+                    select(User).options(*self._loaded()).order_by(User.id)
+                )
+            ).all()
+        )
+
     async def pending_iiko(self):
         stmt = (
             select(User)
@@ -151,6 +177,14 @@ class LoyaltyAccountRepository:
     async def by_user_id(self, user_id: int):
         return await self.session.scalar(
             select(LoyaltyAccount).where(LoyaltyAccount.user_id == user_id)
+        )
+
+    async def lock_by_user_id(self, user_id: int):
+        return await self.session.scalar(
+            select(LoyaltyAccount)
+            .where(LoyaltyAccount.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
 
     async def by_customer_id(self, customer_id: str):

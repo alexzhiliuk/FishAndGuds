@@ -2,7 +2,7 @@ import io
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Awaitable, Callable, Collection
+from typing import Awaitable, Callable, Collection, Literal
 
 import qrcode
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -12,6 +12,7 @@ from app.integrations.iiko.exceptions import IikoError
 from app.models.entities import MailingStatus, MailingType, RunStatus
 from app.repositories import (
     ApplicationSettingRepository,
+    LoyaltyAccountRepository,
     MailingRepository,
     PurchaseRepository,
     RestaurantRepository,
@@ -24,6 +25,7 @@ from app.services.iiko import (
     RestaurantSyncService,
 )
 from app.services.registration import RegistrationService
+from app.services.user_cache import user_data_is_fresh, user_refresh_lock
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,15 @@ class RegistrationDocument:
     key: str
     file_id: str
     file_name: str
+
+
+@dataclass(frozen=True)
+class SyncResult:
+    total_users: int
+    processed_users: int
+    failed_users: int
+    skipped_users: int
+    imported: int
 
 
 class ApplicationSettingsService:
@@ -90,6 +101,84 @@ class ApplicationSettingsService:
         await self.session.commit()
 
 
+class UserDataRefreshService:
+    def __init__(
+        self,
+        session: AsyncSession,
+        iiko: IikoClient | None,
+        default_organization_id: str | None,
+        *,
+        history_days: int = 365,
+        page_size: int = 100,
+    ):
+        self.session, self.iiko, self.default_organization_id = (
+            session,
+            iiko,
+            default_organization_id,
+        )
+        self.history_days, self.page_size = history_days, page_size
+
+    async def refresh(self, user, kind: Literal["profile", "transactions"]):
+        account = user.loyalty_account
+        if (
+            not self.iiko
+            or not self.default_organization_id
+            or not account
+            or not account.iiko_customer_id
+        ):
+            return user
+        timestamp = (
+            "balance_synced_at" if kind == "profile" else "transactions_synced_at"
+        )
+        if user_data_is_fresh(getattr(account, timestamp)):
+            return user
+        user_id = user.id
+        async with user_refresh_lock(self.session, user_id):
+            account = await LoyaltyAccountRepository(self.session).lock_by_user_id(
+                user_id
+            )
+            repository = UserRepository(self.session)
+            user = await repository.by_id(user_id, refresh=True)
+            if user is None or account is None or not account.iiko_customer_id:
+                return user
+            # Another request may have refreshed the account while we waited.
+            if user_data_is_fresh(getattr(account, timestamp)):
+                return user
+            try:
+                if kind == "profile":
+                    customer = await self.iiko.get_customer_info(
+                        organization_id=self.default_organization_id,
+                        customer_id=account.iiko_customer_id,
+                    )
+                    if customer is None:
+                        raise IikoError("Customer data could not be refreshed")
+                    await CustomerService(
+                        self.session, self.iiko, self.default_organization_id
+                    ).sync_customer(user, customer)
+                    await CardService(
+                        self.session, self.iiko, self.default_organization_id
+                    ).sync_card(user, customer)
+                    await self.session.commit()
+                else:
+                    await LoyaltySyncService(
+                        self.session,
+                        self.iiko,
+                        default_organization_id=self.default_organization_id,
+                        history_days=self.history_days,
+                        page_size=self.page_size,
+                    ).sync_transactions_by_revision(user)
+            except IikoError:
+                await self.session.rollback()
+                logger.warning(
+                    "User request uses cached iiko data user_id=%s kind=%s",
+                    user_id,
+                    kind,
+                )
+                # Rollback expires ORM objects; reload the last committed data.
+                user = await repository.by_id(user_id, refresh=True)
+            return user
+
+
 class LoyaltyService:
     def __init__(
         self,
@@ -107,23 +196,12 @@ class LoyaltyService:
         user = await UserRepository(self.session).by_telegram_id(telegram_id)
         if not user or not user.loyalty_account:
             return None
+        user = await UserDataRefreshService(
+            self.session, self.iiko, self.default_organization_id
+        ).refresh(user, "profile")
+        if user is None or user.loyalty_account is None:
+            return None
         account = user.loyalty_account
-        if self.iiko and self.default_organization_id and account.iiko_customer_id:
-            try:
-                customer = await self.iiko.get_customer_info(
-                    organization_id=self.default_organization_id,
-                    customer_id=account.iiko_customer_id,
-                )
-                if customer:
-                    await CustomerService(
-                        self.session, self.iiko, self.default_organization_id
-                    ).sync_customer(user, customer)
-                    await CardService(
-                        self.session, self.iiko, self.default_organization_id
-                    ).sync_card(user, customer)
-                    await self.session.commit()
-            except IikoError:
-                logger.warning("Profile uses cached iiko data user_id=%s", user.id)
         return {"user": user, "card": account, "balance": account.last_known_balance}
 
     @staticmethod
@@ -137,14 +215,31 @@ class LoyaltyService:
 
 
 class PurchaseService:
-    def __init__(self, session: AsyncSession):
+    def __init__(
+        self,
+        session: AsyncSession,
+        iiko: IikoClient | None = None,
+        default_organization_id: str | None = None,
+        *,
+        history_days: int = 365,
+        page_size: int = 100,
+    ):
         self.session = session
+        self.refresh_service = UserDataRefreshService(
+            session,
+            iiko,
+            default_organization_id,
+            history_days=history_days,
+            page_size=page_size,
+        )
 
     async def page(self, user_id: int, page: int):
         return await PurchaseRepository(self.session).page(user_id, page)
 
     async def page_for_telegram(self, telegram_id: int, page: int):
         user = await UserRepository(self.session).by_telegram_id(telegram_id)
+        if user is not None:
+            user = await self.refresh_service.refresh(user, "transactions")
         return None if user is None else await self.page(user.id, page)
 
 
@@ -270,7 +365,9 @@ class SyncService:
 
     async def sync_user(self, user):
         if not user.loyalty_account.iiko_customer_id:
-            return int(await self._registration().sync_pending_user(user))
+            if not await self._registration().sync_pending_user(user):
+                raise IikoError("Pending user sync deferred")
+            return 1
         customer = await self.iiko.get_customer_info(
             organization_id=self.default_organization_id,
             customer_id=user.loyalty_account.iiko_customer_id,
@@ -292,12 +389,33 @@ class SyncService:
         )
 
     async def sync_all(self):
-        total = 0
-        for user in await UserRepository(self.session).active():
-            if user.loyalty_account:
+        repository = UserRepository(self.session)
+        user_ids = await repository.active_ids()
+        total = processed = failed = skipped = 0
+        for user_id in user_ids:
+            try:
+                # Reload after each rollback: SQLAlchemy expires existing objects.
+                user = await repository.by_id(user_id)
+                if user is None or not user.is_active or not user.loyalty_account:
+                    skipped += 1
+                    continue
                 total += await self.sync_user(user)
-        logger.info("Sync completed, imported=%s", total)
-        return total
+                processed += 1
+            except Exception:
+                await self.session.rollback()
+                failed += 1
+                logger.exception("User transaction sync failed user_id=%s", user_id)
+        result = SyncResult(len(user_ids), processed, failed, skipped, total)
+        log = logger.warning if failed else logger.info
+        log(
+            "Transaction sync summary total=%s processed=%s failed=%s skipped=%s imported=%s",
+            result.total_users,
+            result.processed_users,
+            result.failed_users,
+            result.skipped_users,
+            result.imported,
+        )
+        return result
 
 
 class MailingService:
@@ -375,20 +493,33 @@ class MailingService:
         if not item:
             raise ValueError("Рассылка не найдена")
         excluded = set(excluded_telegram_ids)
-        users = [
-            user
-            for user in await UserRepository(self.session).active()
-            if user.telegram_id not in excluded
-            and (
-                user.notification_settings is None
-                or user.notification_settings.push_enabled
-            )
-        ]
+        audience = await UserRepository(self.session).mailing_audience()
+        summary = dict(
+            total_users=len(audience),
+            excluded_admins=0,
+            excluded_inactive=0,
+            excluded_push=0,
+        )
+        users = []
+        for user in audience:
+            # Exclusive categories: every user appears exactly once in the report.
+            if user.telegram_id in excluded:
+                summary["excluded_admins"] += 1
+            elif not user.is_active:
+                summary["excluded_inactive"] += 1
+            elif (
+                user.notification_settings
+                and not user.notification_settings.push_enabled
+            ):
+                summary["excluded_push"] += 1
+            else:
+                users.append(user)
         now = datetime.now(timezone.utc)
         item.status = MailingStatus.sending
         run = await repo.add_run(
             mailing_id=item.id,
             total_count=len(users),
+            audience_summary=summary,
             sent_count=0,
             failed_count=0,
             status=RunStatus.sending,

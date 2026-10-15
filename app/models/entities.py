@@ -98,6 +98,9 @@ class LoyaltyAccount(Base, TimestampMixin):
     categories: Mapped[list] = mapped_column(JSON, default=list)
     last_known_balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=0)
     balance_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    transactions_synced_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     last_transaction_revision: Mapped[int | None] = mapped_column(BigInteger)
     last_transaction_id: Mapped[str | None] = mapped_column(String(128))
     iiko_sync_status: Mapped[IikoSyncStatus] = mapped_column(
@@ -228,6 +231,7 @@ class MailingRun(Base):
         ForeignKey("mailings.id", ondelete="CASCADE"), index=True
     )
     total_count: Mapped[int] = mapped_column(default=0)
+    audience_summary: Mapped[dict[str, int] | None] = mapped_column(JSON)
     sent_count: Mapped[int] = mapped_column(default=0)
     failed_count: Mapped[int] = mapped_column(default=0)
     status: Mapped[RunStatus] = mapped_column(

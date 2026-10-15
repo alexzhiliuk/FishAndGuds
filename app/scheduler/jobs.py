@@ -53,13 +53,6 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
             except Exception:
                 logger.exception("Scheduled pending-user sync failed")
 
-    async def transactions():
-        async with session_factory() as session:
-            try:
-                await sync_service(session).sync_all()
-            except Exception:
-                logger.exception("Scheduled transaction sync failed")
-
     async def due_mailings():
         async with session_factory() as session:
             for item in await MailingRepository(session).due(
@@ -127,14 +120,6 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
         "interval",
         minutes=5,
         id="pending_iiko",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        transactions,
-        "interval",
-        minutes=settings.purchase_sync_interval_minutes,
-        id="transactions",
         max_instances=1,
         coalesce=True,
     )

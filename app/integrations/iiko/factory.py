@@ -14,6 +14,9 @@ def create_iiko_client(
         app_id=settings.iiko_app_id,
         client_secret=settings.iiko_client_secret,
         timeout=settings.iiko_timeout_seconds,
+        request_interval=settings.iiko_request_interval_seconds,
+        rate_limit_retries=settings.iiko_rate_limit_retries,
+        max_rate_limit_wait=settings.iiko_max_rate_limit_wait_seconds,
     )
     if cache is None:
         return backend
