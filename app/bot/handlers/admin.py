@@ -142,6 +142,21 @@ async def admin_back(callback: CallbackQuery, settings: Settings):
     await callback.answer()
 
 
+@router.callback_query(F.data == "admin:user_count")
+async def admin_user_count(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    count = await UserRepository(session).count_all()
+    await answer_with_buttons(
+        callback.message,
+        f"👥 Всего пользователей в базе: {count}",
+        reply_markup=admin_menu(),
+    )
+    await callback.answer()
+
+
 def legal_admin_text(documents: dict) -> str:
     lines = ["📄 Документы регистрации", ""]
     for key, label in APPLICATION_DOCUMENTS.items():
@@ -655,7 +670,7 @@ async def send_now(
         lambda uid, text, image: telegram_sender(bot, settings, uid, text, image),
         include_telegram_ids=settings.admin_ids,
     )
-    await callback.message.answer(mailing_report(run))
+    await callback.message.answer(mailing_report(run), reply_markup=admin_menu())
 
 
 @router.callback_query(F.data.startswith("mail:schedule:"))

@@ -486,10 +486,11 @@ def test_main_menu_return_uses_visible_title_without_repeating_welcome():
     assert "Добро пожаловать" not in user_handlers.MENU_ONLY_TEXT
 
 
-def test_admin_menu_does_not_expose_users_button():
+def test_admin_menu_exposes_users_count_button():
     assert callback_data(admin_menu()) == [
         "admin:create",
         "admin:list",
+        "admin:user_count",
         "admin:restaurants",
         "admin:legal",
         "nav:main",

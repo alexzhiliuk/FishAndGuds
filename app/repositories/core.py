@@ -89,6 +89,9 @@ class UserRepository:
         stmt = select(User).where(User.is_active.is_(True)).options(*self._loaded())
         return list((await self.session.scalars(stmt)).all())
 
+    async def count_all(self) -> int:
+        return int(await self.session.scalar(select(func.count(User.id))) or 0)
+
     async def active_ids(self):
         return list(
             (
