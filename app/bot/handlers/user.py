@@ -309,7 +309,6 @@ async def registration_complete(
         gender=form.gender,
         email=form.email,
         sms_enabled=form.sms_enabled,
-        push_enabled=form.push_enabled,
         email_enabled=form.email_enabled,
         consent=form.consent,
     )
@@ -424,18 +423,27 @@ async def qr(
 
 
 @router.callback_query(F.data.startswith("purchases:"))
-async def purchases(callback: CallbackQuery, session: AsyncSession, settings: Settings):
+async def purchases(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings, iiko: IikoClient
+):
+    # Initial history import may take longer than the callback acknowledgement window.
+    await callback.answer()
     page_value = callback.data.split(":", 1)[1]
     if page_value == "back":
-        await send_profile(callback.message, callback.from_user.id, session, settings)
-        await callback.answer()
+        await send_profile(
+            callback.message, callback.from_user.id, session, settings, iiko
+        )
         return
     page = int(page_value)
-    result = await PurchaseService(session).page_for_telegram(
-        callback.from_user.id, page
-    )
+    result = await PurchaseService(
+        session,
+        iiko,
+        settings.iiko_default_organization_id,
+        history_days=settings.iiko_transaction_history_days,
+        page_size=settings.iiko_transaction_page_size,
+    ).page_for_telegram(callback.from_user.id, page)
     if result is None:
-        await callback.answer("Сначала зарегистрируйтесь", show_alert=True)
+        await callback.message.answer("Сначала зарегистрируйтесь")
         return
     rows, has_next = result
     if not rows:
@@ -448,7 +456,6 @@ async def purchases(callback: CallbackQuery, session: AsyncSession, settings: Se
     await answer_with_buttons(
         callback.message, text, reply_markup=purchases_keyboard(page, has_next)
     )
-    await callback.answer()
 
 
 @router.callback_query(F.data == "profile:terms")

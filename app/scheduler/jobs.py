@@ -53,13 +53,6 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
             except Exception:
                 logger.exception("Scheduled pending-user sync failed")
 
-    async def transactions():
-        async with session_factory() as session:
-            try:
-                await sync_service(session).sync_all()
-            except Exception:
-                logger.exception("Scheduled transaction sync failed")
-
     async def due_mailings():
         async with session_factory() as session:
             for item in await MailingRepository(session).due(
@@ -70,18 +63,13 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
                     lambda uid, text, image: send_message(
                         bot, settings, uid, text, image
                     ),
-                    excluded_telegram_ids=settings.admin_ids,
+                    include_telegram_ids=settings.admin_ids,
                 )
 
     async def birthdays():
         now = datetime.now(ZoneInfo(settings.timezone))
         async with session_factory() as session:
             for user in await UserRepository(session).birthdays(now.day, now.month):
-                if (
-                    user.notification_settings
-                    and not user.notification_settings.push_enabled
-                ):
-                    continue
                 try:
                     await bot.send_message(
                         user.telegram_id,
@@ -90,21 +78,24 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
                 except Exception:
                     logger.exception("Birthday delivery failed user_id=%s", user.id)
             if holiday_text := HOLIDAYS.get((now.day, now.month)):
-                for user in await UserRepository(session).active():
-                    if (
-                        user.notification_settings
-                        and user.notification_settings.holidays_enabled
-                        and user.notification_settings.push_enabled
-                    ):
-                        try:
-                            await bot.send_message(
-                                user.telegram_id,
-                                f"🎉 {user.first_name}, {holiday_text}",
-                            )
-                        except Exception:
-                            logger.exception(
-                                "Holiday delivery failed user_id=%s", user.id
-                            )
+                active_users = await UserRepository(session).active()
+                notified_ids = set()
+                for user in active_users:
+                    notified_ids.add(user.telegram_id)
+                    try:
+                        await bot.send_message(
+                            user.telegram_id,
+                            f"🎉 {user.first_name}, {holiday_text}",
+                        )
+                    except Exception:
+                        logger.exception("Holiday delivery failed user_id=%s", user.id)
+                for telegram_id in sorted(set(settings.admin_ids) - notified_ids):
+                    try:
+                        await bot.send_message(telegram_id, f"🎉 {holiday_text}")
+                    except Exception:
+                        logger.exception(
+                            "Holiday delivery failed telegram_id=%s", telegram_id
+                        )
 
     scheduler.add_job(
         due_mailings,
@@ -127,14 +118,6 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
         "interval",
         minutes=5,
         id="pending_iiko",
-        max_instances=1,
-        coalesce=True,
-    )
-    scheduler.add_job(
-        transactions,
-        "interval",
-        minutes=settings.purchase_sync_interval_minutes,
-        id="transactions",
         max_instances=1,
         coalesce=True,
     )
