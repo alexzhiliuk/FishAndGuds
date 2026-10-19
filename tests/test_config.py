@@ -25,3 +25,21 @@ def test_bot_display_name_has_expected_default():
     settings = Settings()
 
     assert settings.bot_display_name == "Клуб «Рыба и Гады»"
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"iiko_request_interval_seconds": 0},
+        {"iiko_request_interval_seconds": float("nan")},
+        {"iiko_rate_limit_retries": -1},
+        {"iiko_rate_limit_retries": 11},
+        {"iiko_max_rate_limit_wait_seconds": -1},
+        {"iiko_max_rate_limit_wait_seconds": 61},
+    ],
+)
+def test_iiko_retry_settings_are_bounded(values):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        Settings(**values)

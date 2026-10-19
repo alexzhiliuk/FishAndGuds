@@ -53,7 +53,6 @@ class UserRepository:
         consent_at: datetime | None = None,
         sync_status: IikoSyncStatus = IikoSyncStatus.pending,
         sms_enabled: bool = True,
-        push_enabled: bool = True,
         email_enabled: bool = True,
     ):
         user = User(
@@ -72,7 +71,6 @@ class UserRepository:
         )
         user.notification_settings = NotificationSettings(
             sms_enabled=sms_enabled,
-            push_enabled=push_enabled,
             email_enabled=email_enabled,
         )
         self.session.add(user)
@@ -91,6 +89,35 @@ class UserRepository:
         stmt = select(User).where(User.is_active.is_(True)).options(*self._loaded())
         return list((await self.session.scalars(stmt)).all())
 
+    async def count_all(self) -> int:
+        return int(await self.session.scalar(select(func.count(User.id))) or 0)
+
+    async def active_ids(self):
+        return list(
+            (
+                await self.session.scalars(
+                    select(User.id).where(User.is_active.is_(True)).order_by(User.id)
+                )
+            ).all()
+        )
+
+    async def by_id(self, user_id: int, *, refresh: bool = False):
+        return await self.session.scalar(
+            select(User)
+            .where(User.id == user_id)
+            .options(*self._loaded())
+            .execution_options(populate_existing=refresh)
+        )
+
+    async def mailing_audience(self):
+        return list(
+            (
+                await self.session.scalars(
+                    select(User).options(*self._loaded()).order_by(User.id)
+                )
+            ).all()
+        )
+
     async def pending_iiko(self):
         stmt = (
             select(User)
@@ -108,10 +135,8 @@ class UserRepository:
     async def birthdays(self, day: int, month: int):
         stmt = (
             select(User)
-            .join(NotificationSettings)
             .where(
                 User.is_active.is_(True),
-                NotificationSettings.holidays_enabled.is_(True),
                 func.extract("day", User.birthday) == day,
                 func.extract("month", User.birthday) == month,
             )
@@ -151,6 +176,14 @@ class LoyaltyAccountRepository:
     async def by_user_id(self, user_id: int):
         return await self.session.scalar(
             select(LoyaltyAccount).where(LoyaltyAccount.user_id == user_id)
+        )
+
+    async def lock_by_user_id(self, user_id: int):
+        return await self.session.scalar(
+            select(LoyaltyAccount)
+            .where(LoyaltyAccount.user_id == user_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
         )
 
     async def by_customer_id(self, customer_id: str):

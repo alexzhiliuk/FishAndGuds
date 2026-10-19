@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit, urlunsplit
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -23,12 +23,16 @@ class Settings(BaseSettings):
     iiko_client_secret: str = ""
     iiko_default_organization_id: str = "926c9ebc-27a9-4297-a970-a692f1af7f37"
     iiko_timeout_seconds: float = 15.0
+    iiko_request_interval_seconds: float = Field(1.0, ge=0.1, allow_inf_nan=False)
+    iiko_rate_limit_retries: int = Field(3, ge=0, le=10)
+    iiko_max_rate_limit_wait_seconds: float = Field(
+        30.0, ge=0, le=60, allow_inf_nan=False
+    )
     iiko_transaction_history_days: int = 365
     iiko_transaction_page_size: int = 100
     iiko_card_number_prefix: str = "9898"
     iiko_card_number_length: int = 8
     iiko_card_generation_attempts: int = 10
-    purchase_sync_interval_minutes: int = 5
     timezone: str = "Europe/Minsk"
     log_level: str = "INFO"
     api_host: str = "0.0.0.0"

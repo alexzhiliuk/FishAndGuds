@@ -11,7 +11,7 @@ from app.integrations.iiko.client import IikoClient
 from app.integrations.iiko.exceptions import IikoError
 from app.models.entities import IikoSyncStatus
 from app.repositories import UserRepository
-from app.services.iiko import CardService, CustomerService, LoyaltySyncService
+from app.services.iiko import CardService, CustomerService
 from app.services.phone import PhoneNormalizationService
 
 logger = logging.getLogger(__name__)
@@ -25,7 +25,6 @@ class RegistrationSubmission(BaseModel):
     gender: Literal["male", "female"]
     email: str | None = Field(default=None, max_length=254)
     sms_enabled: bool = True
-    push_enabled: bool = True
     email_enabled: bool = True
     consent: bool
 
@@ -141,13 +140,6 @@ class RegistrationService:
         await self._customer_service().sync_customer(user, customer)
         customer = await self._card_service().ensure_card(user, customer)
         await self.session.commit()
-        await LoyaltySyncService(
-            self.session,
-            self.iiko,
-            default_organization_id=self.default_organization_id,
-            history_days=self.history_days,
-            page_size=self.page_size,
-        ).initial_sync_transactions(user)
         return RegistrationStart(user=user)
 
     async def complete(
@@ -163,7 +155,6 @@ class RegistrationService:
         consent: bool,
         gender: str | None = None,
         sms_enabled: bool = True,
-        push_enabled: bool = True,
         email_enabled: bool = True,
     ):
         if not consent:
@@ -186,7 +177,6 @@ class RegistrationService:
             consent_at=datetime.now(timezone.utc),
             sync_status=IikoSyncStatus.pending,
             sms_enabled=sms_enabled,
-            push_enabled=push_enabled,
             email_enabled=email_enabled,
         )
         await self.session.commit()
@@ -199,13 +189,6 @@ class RegistrationService:
             customer = await self._card_service().ensure_card(user, customer)
             await self._customer_service().sync_customer(user, customer)
             await self.session.commit()
-            await LoyaltySyncService(
-                self.session,
-                self.iiko,
-                default_organization_id=self.default_organization_id,
-                history_days=self.history_days,
-                page_size=self.page_size,
-            ).initial_sync_transactions(user)
             logger.info(
                 "Pending iiko registration synced user_id=%s iiko_customer_id=%s organizationId=%s",
                 user.id,
