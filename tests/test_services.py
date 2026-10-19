@@ -11,6 +11,7 @@ from app.services import (
     ApplicationSettingsService,
     LoyaltyService,
     MailingService,
+    PurchaseService,
     RegistrationService,
     RegistrationSubmission,
     RestaurantService,
@@ -20,6 +21,96 @@ from app.services.phone import PhoneNormalizationService
 from tests.iiko_double import IikoTestDouble
 
 ORG = "926c9ebc-27a9-4297-a970-a692f1af7f37"
+
+
+@pytest.mark.asyncio
+async def test_mailing_includes_admins_and_freezes_audience_counts(session):
+    users = []
+    for index in range(33):
+        user = User(
+            telegram_id=100 + index,
+            first_name=f"User {index}",
+            phone=f"+100{index:08d}",
+            is_active=index not in (0, 1),
+        )
+        users.append(user)
+    session.add_all(users)
+    await session.commit()
+    mailing = await MailingService(session).create("Test", "Hello")
+    recipients = []
+
+    async def sender(uid, text, image):
+        recipients.append(uid)
+
+    run = await MailingService(session).send(
+        mailing.id, sender, include_telegram_ids=(100, 999)
+    )
+    assert recipients == [100, *range(102, 133), 999]
+    assert (run.total_count, run.sent_count, run.failed_count) == (33, 33, 0)
+    assert run.audience_summary == dict(
+        total_users=33,
+        included_admins=2,
+        excluded_inactive=1,
+    )
+    # Later activity changes must not rewrite the report for an existing run.
+    users[2].is_active = False
+    await session.commit()
+    await session.refresh(run)
+    assert run.audience_summary["excluded_inactive"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database_failure", [False, True])
+async def test_transaction_sync_continues_after_error_and_rolls_back(
+    session,
+    monkeypatch,
+    caplog,
+    database_failure,
+):
+    from app.models import LoyaltyAccount
+    from app.integrations.iiko.exceptions import IikoRequestError
+
+    users = [
+        User(
+            telegram_id=i,
+            first_name=f"User {i}",
+            phone=f"+1000000000{i}",
+            is_active=i != 4,
+            loyalty_account=LoyaltyAccount() if i != 3 else None,
+        )
+        for i in range(1, 5)
+    ]
+    session.add_all(users)
+    await session.commit()
+    first_id, second_id = users[0].id, users[1].id
+    sync = SyncService(session, IikoTestDouble(), default_organization_id=ORG)
+    attempts = []
+
+    async def sync_user(user):
+        attempts.append(user.id)
+        if user.id == first_id:
+            user.first_name = "Must roll back"
+            if database_failure:
+                user.phone = "+10000000002"
+            await session.flush()
+            raise IikoRequestError("Too many requests", status_code=429)
+        user.first_name = "Synced"
+        await session.commit()
+        return 4
+
+    monkeypatch.setattr(sync, "sync_user", sync_user)
+    result = await sync.sync_all()
+    assert attempts == [first_id, second_id]
+    assert (
+        result.total_users,
+        result.processed_users,
+        result.failed_users,
+        result.skipped_users,
+        result.imported,
+    ) == (3, 1, 1, 1, 4)
+    assert (await UserRepository(session).by_id(first_id)).first_name == "User 1"
+    assert (await UserRepository(session).by_id(second_id)).first_name == "Synced"
+    assert "total=3 processed=1 failed=1 skipped=1 imported=4" in caplog.text
 
 
 def test_mini_app_registration_submission_validation():
@@ -40,7 +131,7 @@ def test_mini_app_registration_submission_validation():
     assert form.first_name == "Иван"
     assert form.middle_name is None
     assert form.gender == "male"
-    assert form.push_enabled is False
+    assert not hasattr(form, "push_enabled")
     with pytest.raises(ValueError):
         RegistrationSubmission.model_validate(
             {
@@ -126,13 +217,12 @@ async def test_new_customer_is_created_in_iiko_with_matching_unique_card(session
         gender="male",
         email=None,
         sms_enabled=False,
-        push_enabled=True,
         email_enabled=False,
         consent=True,
     )
     assert user.gender == "male"
     assert user.notification_settings.sms_enabled is False
-    assert user.notification_settings.push_enabled is True
+    assert not hasattr(user.notification_settings, "push_enabled")
     assert user.notification_settings.email_enabled is False
     assert user.loyalty_account.iiko_customer_id
     assert user.loyalty_account.iiko_sync_status.value == "synced"
@@ -229,7 +319,10 @@ async def test_transaction_sync_is_idempotent_and_skips_null_orders(session):
     client = IikoTestDouble(default_organization_id=ORG)
     user = (await registration(session, client).start(42, "+375291234567")).user
     initial_count = await session.scalar(select(func.count(LoyaltyTransaction.id)))
+    assert initial_count == 0  # Registration no longer imports purchase history.
     sync = SyncService(session, client, default_organization_id=ORG)
+    await sync.sync_user(user)
+    initial_count = await session.scalar(select(func.count(LoyaltyTransaction.id)))
     await sync.sync_user(user)
     assert (
         await session.scalar(select(func.count(LoyaltyTransaction.id)))
@@ -289,6 +382,7 @@ async def test_closed_order_is_saved_with_bonus_summary(session):
 
     client = SummaryOnlyIiko(default_organization_id=ORG)
     await registration(session, client).start(42, "+375291234567")
+    await PurchaseService(session, client, ORG).page_for_telegram(42, 0)
 
     purchase = await session.scalar(select(Purchase))
     assert purchase.order_number == "33066"
@@ -322,6 +416,7 @@ async def test_by_date_pagination_and_cross_organization_duplicates(session):
         session, client, default_organization_id=ORG, history_days=365, page_size=1
     )
     await service.start(42, "+375291234567")
+    await PurchaseService(session, client, ORG, page_size=1).page_for_telegram(42, 0)
     assert await session.scalar(select(func.count(LoyaltyTransaction.id))) == 3
 
 
@@ -431,7 +526,7 @@ async def test_missing_iiko_website_clears_it_and_keeps_admin_booking_fallback(s
 
 
 @pytest.mark.asyncio
-async def test_mailing_counts_failures_and_excludes_admin(session):
+async def test_mailing_includes_admin_and_counts_failures(session):
     session.add_all(
         [
             User(telegram_id=1, first_name="A", phone="+10000000001"),
@@ -447,25 +542,24 @@ async def test_mailing_counts_failures_and_excludes_admin(session):
         if uid == 3:
             raise RuntimeError("blocked")
 
-    run = await service.send(item.id, sender, excluded_telegram_ids=(1,))
-    assert (run.total_count, run.sent_count, run.failed_count) == (2, 1, 1)
+    run = await service.send(item.id, sender, include_telegram_ids=(1,))
+    assert (run.total_count, run.sent_count, run.failed_count) == (3, 2, 1)
 
 
 @pytest.mark.asyncio
-async def test_telegram_mailing_respects_push_preference(session):
+async def test_telegram_mailing_does_not_check_notification_preferences(session):
     session.add_all(
         [
             User(
                 telegram_id=10,
                 first_name="Push",
                 phone="+10000000010",
-                notification_settings=NotificationSettings(push_enabled=True),
             ),
             User(
                 telegram_id=11,
                 first_name="No push",
                 phone="+10000000011",
-                notification_settings=NotificationSettings(push_enabled=False),
+                notification_settings=NotificationSettings(email_enabled=False),
             ),
         ]
     )
@@ -477,8 +571,8 @@ async def test_telegram_mailing_respects_push_preference(session):
         recipients.append(uid)
 
     run = await MailingService(session).send(item.id, sender)
-    assert recipients == [10]
-    assert run.total_count == 1
+    assert recipients == [10, 11]
+    assert run.total_count == 2
 
 
 @pytest.mark.asyncio

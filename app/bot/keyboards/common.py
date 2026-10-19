@@ -206,6 +206,12 @@ def admin_menu():
             [InlineKeyboardButton(text="📨 Рассылки", callback_data="admin:list")],
             [
                 InlineKeyboardButton(
+                    text="👥 Количество пользователей",
+                    callback_data="admin:user_count",
+                )
+            ],
+            [
+                InlineKeyboardButton(
                     text="🏪 Рестораны и ссылки", callback_data="admin:restaurants"
                 )
             ],

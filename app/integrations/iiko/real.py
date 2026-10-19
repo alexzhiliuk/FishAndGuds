@@ -1,7 +1,11 @@
+import asyncio
 import base64
 import json
 import logging
+import math
+import time
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
@@ -31,6 +35,9 @@ class RealIikoClient(IikoClient):
         app_id: str,
         client_secret: str,
         timeout: float = 15.0,
+        request_interval: float = 1.0,
+        rate_limit_retries: int = 3,
+        max_rate_limit_wait: float = 30.0,
         transport=None,
     ):
         self._http = httpx.AsyncClient(
@@ -39,6 +46,65 @@ class RealIikoClient(IikoClient):
         self.api_key, self.app_id, self.client_secret = api_key, app_id, client_secret
         self._token: str | None = None
         self._token_expires_at: datetime | None = None
+        self._request_interval = request_interval
+        self._rate_limit_retries = rate_limit_retries
+        self._max_rate_limit_wait = max_rate_limit_wait
+        self._request_lock = asyncio.Lock()
+        self._token_lock = asyncio.Lock()
+        self._next_request_at = 0.0
+        self._rate_limited_until = 0.0
+
+    @staticmethod
+    def _retry_after(response: httpx.Response, attempt: int) -> float:
+        value = response.headers.get("Retry-After", "")
+        try:
+            delay = float(value)
+        except ValueError:
+            try:
+                date = parsedate_to_datetime(value)
+                if date.tzinfo is None:
+                    date = date.replace(tzinfo=timezone.utc)
+                delay = (date - datetime.now(timezone.utc)).total_seconds()
+            except (ValueError, TypeError, OverflowError):
+                delay = 2.0**attempt
+        return max(0.0, delay) if math.isfinite(delay) else 2.0**attempt
+
+    async def _post(
+        self, endpoint: str, *, json: dict[str, Any], headers=None, retry_429=False
+    ) -> httpx.Response:
+        for attempt in range(self._rate_limit_retries + 1):
+            async with self._request_lock:
+                now = time.monotonic()
+                cooldown = self._rate_limited_until - now
+                if cooldown > self._max_rate_limit_wait:
+                    # Preserve a long server cooldown without blocking a job for hours.
+                    raise IikoRequestError(
+                        f"iiko rate limit cooldown: {endpoint}", status_code=429
+                    )
+                delay = max(self._next_request_at, self._rate_limited_until) - now
+                if delay > 0:
+                    await asyncio.sleep(delay)
+                self._next_request_at = time.monotonic() + self._request_interval
+                response = await self._http.post(endpoint, json=json, headers=headers)
+                if response.status_code != 429:
+                    return response
+                retry_after = self._retry_after(response, attempt)
+                self._rate_limited_until = max(
+                    self._rate_limited_until, time.monotonic() + retry_after
+                )
+                logger.warning(
+                    "iiko rate limited endpoint=%s attempt=%s retry_after=%s",
+                    endpoint,
+                    attempt + 1,
+                    retry_after,
+                )
+            if (
+                not retry_429
+                or attempt == self._rate_limit_retries
+                or retry_after > self._max_rate_limit_wait
+            ):
+                return response
+        raise AssertionError("Unreachable retry state")
 
     async def close(self):
         await self._http.aclose()
@@ -62,6 +128,10 @@ class RealIikoClient(IikoClient):
             return {}
 
     async def get_access_token(self) -> str:
+        async with self._token_lock:
+            return await self._get_access_token()
+
+    async def _get_access_token(self) -> str:
         now = datetime.now(timezone.utc)
         if (
             self._token
@@ -70,13 +140,14 @@ class RealIikoClient(IikoClient):
         ):
             return self._token
         try:
-            response = await self._http.post(
+            response = await self._post(
                 "/api/v2/access_token",
                 json={
                     "apiKey": self.api_key,
                     "appId": self.app_id,
                     "clientSecret": self.client_secret,
                 },
+                retry_429=True,
             )
         except httpx.HTTPError as exc:
             raise IikoUnavailableError("iiko authentication is unavailable") from exc
@@ -87,6 +158,12 @@ class RealIikoClient(IikoClient):
             response.status_code,
             correlation_id,
         )
+        if response.status_code == 429:
+            raise IikoRequestError(
+                "iiko authentication rate limited",
+                status_code=429,
+                correlation_id=correlation_id,
+            )
         if response.status_code >= 400 or not data.get("token"):
             raise IikoAuthenticationError(
                 f"iiko authentication failed, status={response.status_code}, correlationId={correlation_id}"
@@ -100,8 +177,17 @@ class RealIikoClient(IikoClient):
     ) -> dict[str, Any]:
         token = await self.get_access_token()
         try:
-            response = await self._http.post(
-                endpoint, json=payload, headers={"Authorization": f"Bearer {token}"}
+            response = await self._post(
+                endpoint,
+                json=payload,
+                headers={"Authorization": f"Bearer {token}"},
+                retry_429=endpoint
+                in {
+                    "/api/1/organizations",
+                    "/api/1/loyalty/iiko/customer/info",
+                    "/api/1/loyalty/iiko/customer/transactions/by_date",
+                    "/api/1/loyalty/iiko/customer/transactions/by_revision",
+                },
             )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
             raise IikoUnavailableError(

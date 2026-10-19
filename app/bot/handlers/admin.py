@@ -22,6 +22,7 @@ from app.bot.keyboards.common import (
     restaurant_link_edit_keyboard,
 )
 from app.bot.media import resolve_mailing_photo
+from app.bot.mailing_report import mailing_report
 from app.bot.navigation import (
     answer_photo_with_buttons,
     answer_with_buttons,
@@ -137,6 +138,21 @@ async def admin_back(callback: CallbackQuery, settings: Settings):
         return
     await answer_with_buttons(
         callback.message, "⚙️ Административное меню", reply_markup=admin_menu()
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "admin:user_count")
+async def admin_user_count(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    count = await UserRepository(session).count_all()
+    await answer_with_buttons(
+        callback.message,
+        f"👥 Всего пользователей в базе: {count}",
+        reply_markup=admin_menu(),
     )
     await callback.answer()
 
@@ -546,6 +562,10 @@ async def open_mailing(
         await callback.answer("Рассылка не найдена", show_alert=True)
         return
     await send_mailing_preview(callback.message, item, settings, int(page))
+    if item.runs:
+        latest = max(item.runs, key=lambda run: run.id)
+        if latest.finished_at is not None:
+            await callback.message.answer(mailing_report(latest))
     await callback.answer()
 
 
@@ -648,11 +668,9 @@ async def send_now(
     run = await MailingService(session).send(
         item_id,
         lambda uid, text, image: telegram_sender(bot, settings, uid, text, image),
-        excluded_telegram_ids=settings.admin_ids,
+        include_telegram_ids=settings.admin_ids,
     )
-    await callback.message.answer(
-        f"Рассылка завершена.\n\nПолучателей: {run.total_count}\n✅ Отправлено: {run.sent_count}\n❌ Ошибок: {run.failed_count}"
-    )
+    await callback.message.answer(mailing_report(run), reply_markup=admin_menu())
 
 
 @router.callback_query(F.data.startswith("mail:schedule:"))
