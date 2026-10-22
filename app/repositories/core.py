@@ -398,8 +398,11 @@ class MailingRepository:
         return item
 
     async def get(self, item_id: int):
-        return await self.session.get(
-            Mailing, item_id, options=[selectinload(Mailing.runs)]
+        return await self.session.scalar(
+            select(Mailing)
+            .where(Mailing.id == item_id)
+            .options(selectinload(Mailing.runs))
+            .execution_options(populate_existing=True)
         )
 
     async def list(self):
@@ -413,9 +416,14 @@ class MailingRepository:
             ).all()
         )
 
-    async def page(self, page: int, size: int):
+    async def page(self, page: int, size: int, archived: bool = False):
         stmt = (
             select(Mailing)
+            .where(
+                Mailing.archived_at.is_not(None)
+                if archived
+                else Mailing.archived_at.is_(None)
+            )
             .order_by(Mailing.created_at.desc(), Mailing.id.desc())
             .offset(page * size)
             .limit(size + 1)
@@ -428,6 +436,7 @@ class MailingRepository:
             (
                 await self.session.scalars(
                     select(Mailing).where(
+                        Mailing.archived_at.is_(None),
                         Mailing.status == MailingStatus.scheduled,
                         Mailing.scheduled_at <= now,
                     )

@@ -176,6 +176,19 @@ def mailing_input_back(callback_data: str):
     )
 
 
+def mailing_image_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="❌ Без фото", callback_data="mail:without_photo"
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="mail:create_back")],
+        ]
+    )
+
+
 def purchases_keyboard(page: int, has_next: bool):
     row = []
     if page:
@@ -301,11 +314,14 @@ def admin_restaurant_links_keyboard(item_id: int, *, allow_delivery: bool = True
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def mailing_list_keyboard(items, page: int, has_next: bool):
+def mailing_list_keyboard(items, page: int, has_next: bool, archived: bool = False):
+    open_action = "archived" if archived else "open"
+    list_action = "mail:archive_list" if archived else "admin:list"
     rows = [
         [
             InlineKeyboardButton(
-                text=f"📨 {item.name[:52]}", callback_data=f"mail:open:{item.id}:{page}"
+                text=f"📨 {item.name[:52]}",
+                callback_data=f"mail:{open_action}:{item.id}:{page}",
             )
         ]
         for item in items
@@ -314,24 +330,34 @@ def mailing_list_keyboard(items, page: int, has_next: bool):
     if page > 0:
         pagination.append(
             InlineKeyboardButton(
-                text="◀️ Предыдущая", callback_data=f"admin:list:{page - 1}"
+                text="◀️ Предыдущая", callback_data=f"{list_action}:{page - 1}"
             )
         )
     if has_next:
         pagination.append(
             InlineKeyboardButton(
-                text="Следующая ▶️", callback_data=f"admin:list:{page + 1}"
+                text="Следующая ▶️", callback_data=f"{list_action}:{page + 1}"
             )
         )
     if pagination:
         rows.append(pagination)
+    if not archived:
+        rows.append(
+            [InlineKeyboardButton(text="🗃 Архив", callback_data="mail:archive_list:0")]
+        )
     rows.append([InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def mailing_actions(item_id: int, status: str, list_page: int = 0):
+def mailing_actions(
+    item_id: int,
+    status: str,
+    list_page: int = 0,
+    latest_run_id: int = 0,
+    archived: bool = False,
+):
     rows = []
-    if status != "sending":
+    if status != "sending" and not archived:
         rows += [
             [
                 InlineKeyboardButton(
@@ -351,7 +377,8 @@ def mailing_actions(item_id: int, status: str, list_page: int = 0):
             ],
             [
                 InlineKeyboardButton(
-                    text="🚀 Отправить сейчас", callback_data=f"mail:send:{item_id}"
+                    text="🚀 Отправить сейчас",
+                    callback_data=f"mail:send:{item_id}:{latest_run_id}",
                 ),
                 InlineKeyboardButton(
                     text="🕒 Запланировать",
@@ -359,7 +386,7 @@ def mailing_actions(item_id: int, status: str, list_page: int = 0):
                 ),
             ],
         ]
-    if status == "scheduled":
+    if status == "scheduled" and not archived:
         rows.append(
             [
                 InlineKeyboardButton(
@@ -367,19 +394,143 @@ def mailing_actions(item_id: int, status: str, list_page: int = 0):
                 )
             ]
         )
-    if status != "sending":
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="📜 История отправок",
+                callback_data=f"mail:history:{item_id}:0:{list_page}:{int(archived)}",
+            )
+        ]
+    )
+    if status != "sending" and not archived:
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🗑 Удалить", callback_data=f"mail:delete:{item_id}:{list_page}"
+                    text="🗃 В архив", callback_data=f"mail:delete:{item_id}:{list_page}"
+                )
+            ]
+        )
+    if archived:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🗑 Удалить навсегда",
+                    callback_data=f"mail:purge_prompt:{item_id}:{list_page}",
                 )
             ]
         )
     rows.append(
         [
             InlineKeyboardButton(
-                text="⬅️ К списку", callback_data=f"admin:list_back:{list_page}"
+                text="⬅️ К списку",
+                callback_data=f"mail:archive_list:{list_page}"
+                if archived
+                else f"admin:list_back:{list_page}",
             )
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+def mailing_purge_keyboard(item_id: int, list_page: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🗑 Да, удалить навсегда",
+                    callback_data=f"mail:purge_confirm:{item_id}:{list_page}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Отмена", callback_data=f"mail:archived:{item_id}:{list_page}"
+                )
+            ],
+        ]
+    )
+
+
+def mailing_history_keyboard(
+    item_id, runs, page, has_next, list_page, archived, timezone
+):
+    rows = []
+    for run in runs:
+        date = run.started_at
+        if date.tzinfo is None:
+            from datetime import timezone as dt_timezone
+
+            date = date.replace(tzinfo=dt_timezone.utc)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"#{run.id} · {date.astimezone(timezone):%d.%m.%Y %H:%M} · {run.sent_count}/{run.total_count}",
+                    callback_data=f"mail:run:{run.id}:{page}:{list_page}:{int(archived)}",
+                )
+            ]
+        )
+    pagination = []
+    for target, label in ((page - 1, "◀️ Предыдущая"), (page + 1, "Следующая ▶️")):
+        if (target < page and page > 0) or (target > page and has_next):
+            pagination.append(
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"mail:history:{item_id}:{target}:{list_page}:{int(archived)}",
+                )
+            )
+    if pagination:
+        rows.append(pagination)
+    action = "archived" if archived else "open"
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="⬅️ К рассылке",
+                callback_data=f"mail:{action}:{item_id}:{list_page}",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def mailing_run_keyboard(
+    run, history_page, list_page, archived, can_delete, confirm=False
+):
+    context = f"{run.id}:{history_page}:{list_page}:{int(archived)}"
+    rows = []
+    if confirm:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="✅ Подтвердить удаление",
+                    callback_data=f"mail:confirm:{context}",
+                )
+            ]
+        )
+        rows.append(
+            [InlineKeyboardButton(text="Отмена", callback_data=f"mail:run:{context}")]
+        )
+    else:
+        if can_delete:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        text="🗑 Удалить сообщения у всех",
+                        callback_data=f"mail:remove:{context}",
+                    )
+                ]
+            )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🔄 Обновить статус", callback_data=f"mail:run:{context}"
+                )
+            ]
+        )
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Назад",
+                    callback_data=f"mail:history:{run.mailing_id}:{history_page}:{list_page}:{int(archived)}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)

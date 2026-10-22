@@ -14,6 +14,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -202,9 +203,14 @@ class NotificationSettings(Base):
 
 class Mailing(Base, TimestampMixin):
     __tablename__ = "mailings"
+    __table_args__ = {"sqlite_autoincrement": True}
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(200))
     text: Mapped[str] = mapped_column(Text)
+    entities: Mapped[list[dict] | None] = mapped_column(JSON)
+    archived_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), index=True
+    )
     image_file_id: Mapped[str | None] = mapped_column(String(500))
     type: Mapped[MailingType] = mapped_column(
         Enum(MailingType), default=MailingType.manual
@@ -222,6 +228,7 @@ class Mailing(Base, TimestampMixin):
 
 class MailingRun(Base):
     __tablename__ = "mailing_runs"
+    __table_args__ = {"sqlite_autoincrement": True}
     id: Mapped[int] = mapped_column(primary_key=True)
     mailing_id: Mapped[int] = mapped_column(
         ForeignKey("mailings.id", ondelete="CASCADE"), index=True
@@ -236,4 +243,35 @@ class MailingRun(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
+    snapshot_name: Mapped[str | None] = mapped_column(String(200))
+    snapshot_text: Mapped[str | None] = mapped_column(Text)
+    snapshot_entities: Mapped[list[dict] | None] = mapped_column(JSON)
+    snapshot_image_file_id: Mapped[str | None] = mapped_column(String(500))
+    deletion_status: Mapped[str] = mapped_column(
+        String(20), default="idle", server_default="idle"
+    )
+    deliveries: Mapped[list["MailingDelivery"]] = relationship(
+        back_populates="run", cascade="all, delete-orphan"
+    )
     mailing: Mapped[Mailing] = relationship(back_populates="runs")
+
+
+class MailingDelivery(Base):
+    __tablename__ = "mailing_deliveries"
+    __table_args__ = (
+        UniqueConstraint("run_id", "telegram_id", name="uq_mailing_delivery_recipient"),
+    )
+    id: Mapped[int] = mapped_column(primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        ForeignKey("mailing_runs.id", ondelete="CASCADE"), index=True
+    )
+    telegram_id: Mapped[int] = mapped_column(BigInteger)
+    chat_id: Mapped[int | None] = mapped_column(BigInteger)
+    message_id: Mapped[int | None] = mapped_column(BigInteger)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(20), default="pending")
+    error: Mapped[str | None] = mapped_column(Text)
+    deletion_status: Mapped[str] = mapped_column(String(20), default="pending")
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deletion_error: Mapped[str | None] = mapped_column(Text)
+    run: Mapped[MailingRun] = relationship(back_populates="deliveries")

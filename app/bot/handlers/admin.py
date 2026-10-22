@@ -18,11 +18,16 @@ from app.bot.keyboards.common import (
     document_edit_keyboard,
     mailing_actions,
     mailing_input_back,
+    mailing_image_keyboard,
+    mailing_purge_keyboard,
     mailing_list_keyboard,
+    mailing_history_keyboard,
+    mailing_run_keyboard,
     restaurant_link_edit_keyboard,
 )
 from app.bot.media import resolve_mailing_photo
-from app.bot.mailing_report import mailing_report
+from app.bot.mailing_report import mailing_report, mailing_run_report
+from app.bot.mailing_transport import send_mailing
 from app.bot.navigation import (
     answer_photo_with_buttons,
     answer_with_buttons,
@@ -43,6 +48,13 @@ from app.services import (
     PhoneNormalizationService,
     RestaurantService,
 )
+from app.services.mailing_content import (
+    MailingContent,
+    normalize_mailing_content,
+    validate_mailing_content,
+)
+from app.services.mailings import utc
+from app.models.entities import RunStatus
 
 router = Router(name="admin")
 logger = logging.getLogger(__name__)
@@ -80,14 +92,35 @@ async def send_mailing_preview(
     message: Message, item, settings: Settings, list_page: int = 0
 ):
     """Render a mailing exactly as a recipient will see it, plus admin actions."""
-    reply_markup = mailing_actions(item.id, item.status.value, list_page)
+    latest = max((run.id for run in getattr(item, "runs", [])), default=0)
+    reply_markup = mailing_actions(
+        item.id,
+        item.status.value,
+        list_page,
+        latest,
+        bool(getattr(item, "archived_at", None)),
+    )
+    content = normalize_mailing_content(
+        item.text, getattr(item, "entities", None), item.image_file_id
+    )
     photo = resolve_mailing_photo(item.image_file_id, settings.assets_dir)
     if photo:
         await answer_photo_with_buttons(
-            message, photo, item.text, reply_markup=reply_markup
+            message,
+            photo,
+            content.text,
+            reply_markup=reply_markup,
+            caption_entities=content.telegram_entities(),
+            parse_mode=None,
         )
     else:
-        await answer_with_buttons(message, item.text, reply_markup=reply_markup)
+        await answer_with_buttons(
+            message,
+            content.text,
+            reply_markup=reply_markup,
+            entities=content.telegram_entities(),
+            parse_mode=None,
+        )
 
 
 @router.message(Command("removeme"))
@@ -475,39 +508,89 @@ async def create_back(callback: CallbackQuery, state: FSMContext, settings: Sett
 
 
 @router.message(MailingCreate.name)
-async def create_name(message: Message, state: FSMContext):
+async def create_name(message: Message, state: FSMContext, settings: Settings):
+    if await deny(message, settings):
+        return
+    if not message.text or len(message.text) > 200:
+        await message.answer("Введите название от 1 до 200 символов.")
+        return
     await state.update_data(name=message.text)
     await state.set_state(MailingCreate.text)
     await answer_with_buttons(
         message,
-        "Введите текст рассылки:",
+        "Введите текст рассылки. Ссылку можно оформить через меню Telegram или как [текст](https://example.com/):",
         reply_markup=mailing_input_back("mail:create_back"),
     )
 
 
 @router.message(MailingCreate.text)
-async def create_text(message: Message, state: FSMContext):
-    await state.update_data(text=message.text)
+async def create_text(message: Message, state: FSMContext, settings: Settings):
+    if await deny(message, settings):
+        return
+    try:
+        content = normalize_mailing_content(message.text or "", message.entities)
+        validate_mailing_content(content)
+    except ValueError as exc:
+        await message.answer(
+            str(exc), reply_markup=mailing_input_back("mail:create_back")
+        )
+        return
+    await state.update_data(text=content.text, entities=content.entities)
     await state.set_state(MailingCreate.image)
     await answer_with_buttons(
         message,
-        "Отправьте изображение или напишите «без фото»:",
-        reply_markup=mailing_input_back("mail:create_back"),
+        "Отправьте изображение или нажмите «Без фото»:",
+        reply_markup=mailing_image_keyboard(),
     )
 
 
 @router.message(MailingCreate.image)
-async def create_image(message: Message, state: FSMContext, session: AsyncSession):
-    data = await state.get_data()
+async def create_image(
+    message: Message, state: FSMContext, session: AsyncSession, settings: Settings
+):
+    if await deny(message, settings):
+        return
     image = message.photo[-1].file_id if message.photo else None
     if not image and (message.text or "").lower() not in {"без фото", "нет", "-"}:
         await answer_with_buttons(
             message,
-            "Отправьте фото или напишите «без фото».",
-            reply_markup=mailing_input_back("mail:create_back"),
+            "Отправьте фото или нажмите «Без фото».",
+            reply_markup=mailing_image_keyboard(),
         )
         return
-    item = await MailingService(session).create(data["name"], data["text"], image)
+    await finish_mailing_creation(message, state, session, image)
+
+
+@router.callback_query(F.data == "mail:without_photo")
+async def create_without_photo(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+):
+    if await deny(callback, settings):
+        return
+    if await state.get_state() != MailingCreate.image.state:
+        await callback.answer(
+            "Эта кнопка устарела. Откройте создание рассылки заново.", show_alert=True
+        )
+        return
+    await callback.answer()
+    await finish_mailing_creation(callback.message, state, session, None)
+
+
+async def finish_mailing_creation(message, state, session, image):
+    data = await state.get_data()
+    try:
+        item = await MailingService(session).create(
+            data["name"], data["text"], image, entities=data.get("entities")
+        )
+    except ValueError as exc:
+        await state.set_state(MailingCreate.text)
+        await message.answer(
+            str(exc), reply_markup=mailing_input_back("mail:create_back")
+        )
+        return
     await state.clear()
     await answer_with_buttons(
         message,
@@ -516,14 +599,29 @@ async def create_image(message: Message, state: FSMContext, session: AsyncSessio
     )
 
 
-async def show_mailing_list(message: Message, session: AsyncSession, page: int):
+async def show_mailing_list(
+    message: Message, session: AsyncSession, page: int, archived: bool = False
+):
     page = max(page, 0)
-    items, has_next = await MailingService(session).page(page)
+    service = MailingService(session)
+    items, has_next = (
+        await service.page(page, size=5, archived=True)
+        if archived
+        else await service.page(page)
+    )
     if not items and page > 0:
         page -= 1
-        items, has_next = await MailingService(session).page(page)
-    text = "📨 Выберите рассылку по названию:" if items else "Рассылок пока нет."
-    markup = mailing_list_keyboard(items, page, has_next)
+        items, has_next = (
+            await service.page(page, size=5, archived=True)
+            if archived
+            else await service.page(page)
+        )
+    text = (
+        ("🗃 Архив рассылок:" if items else "Архив пока пуст.")
+        if archived
+        else ("📨 Выберите рассылку по названию:" if items else "Рассылок пока нет.")
+    )
+    markup = mailing_list_keyboard(items, page, has_next, archived=archived)
     await answer_with_buttons(message, text, reply_markup=markup)
 
 
@@ -551,6 +649,7 @@ async def mailing_list_back(
 
 
 @router.callback_query(F.data.startswith("mail:open:"))
+@router.callback_query(F.data.startswith("mail:archived:"))
 async def open_mailing(
     callback: CallbackQuery, session: AsyncSession, settings: Settings
 ):
@@ -562,19 +661,26 @@ async def open_mailing(
         await callback.answer("Рассылка не найдена", show_alert=True)
         return
     await send_mailing_preview(callback.message, item, settings, int(page))
-    if item.runs:
-        latest = max(item.runs, key=lambda run: run.id)
-        if latest.finished_at is not None:
-            await callback.message.answer(mailing_report(latest))
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("mail:edit_"))
-async def edit_start(callback: CallbackQuery, state: FSMContext, settings: Settings):
+async def edit_start(
+    callback: CallbackQuery,
+    state: FSMContext,
+    settings: Settings,
+    session: AsyncSession,
+):
     if await deny(callback, settings):
         return
     _, action, item_id, *page_parts = callback.data.split(":")
     field = action.removeprefix("edit_")
+    item = await MailingService(session).get(int(item_id))
+    if item is None or item.archived_at is not None or item.status.value == "sending":
+        await callback.answer(
+            "Редактирование недоступно. Откройте рассылку заново.", show_alert=True
+        )
+        return
     list_page = int(page_parts[0]) if page_parts else 0
     states = {
         "name": MailingEdit.name,
@@ -615,7 +721,11 @@ async def mailing_input_cancel(
 @router.message(MailingEdit.name)
 @router.message(MailingEdit.text)
 @router.message(MailingEdit.image)
-async def edit_value(message: Message, state: FSMContext, session: AsyncSession):
+async def edit_value(
+    message: Message, state: FSMContext, session: AsyncSession, settings: Settings
+):
+    if await deny(message, settings):
+        return
     data = await state.get_data()
     field = data["field"]
     value = (
@@ -632,28 +742,29 @@ async def edit_value(message: Message, state: FSMContext, session: AsyncSession)
             ),
         )
         return
-    item = await MailingService(session).update(
-        data["mailing_id"],
-        **({"image_file_id": value} if field == "image" else {field: value}),
-    )
+    changes = {"image_file_id": value} if field == "image" else {field: value}
+    if field == "text":
+        changes["entities"] = message.entities
+    try:
+        item = await MailingService(session).update(data["mailing_id"], **changes)
+    except ValueError as exc:
+        await message.answer(
+            str(exc),
+            reply_markup=mailing_input_back(
+                f"mail:input_back:{data['mailing_id']}:{data.get('list_page', 0)}"
+            ),
+        )
+        return
     await state.clear()
-    await answer_with_buttons(
-        message,
-        "Рассылка обновлена.",
-        reply_markup=mailing_actions(
-            item.id, item.status.value, data.get("list_page", 0)
-        ),
-    )
+    item = await MailingService(session).get(item.id)
+    await message.answer("Рассылка обновлена.")
+    await send_mailing_preview(message, item, settings, data.get("list_page", 0))
 
 
 async def telegram_sender(
-    bot: Bot, settings: Settings, telegram_id: int, text: str, image_file_id: str | None
+    bot: Bot, settings: Settings, telegram_id: int, content: MailingContent
 ):
-    photo = resolve_mailing_photo(image_file_id, settings.assets_dir)
-    if photo:
-        await bot.send_photo(telegram_id, photo, caption=text)
-    else:
-        await bot.send_message(telegram_id, text)
+    return await send_mailing(bot, settings, telegram_id, content)
 
 
 @router.callback_query(F.data.startswith("mail:send:"))
@@ -662,14 +773,29 @@ async def send_now(
 ):
     if await deny(callback, settings):
         return
-    item_id = int(callback.data.rsplit(":", 1)[1])
+    parts = callback.data.split(":")
+    if len(parts) != 4:
+        await callback.answer(
+            "Откройте рассылку заново: эта кнопка устарела.", show_alert=True
+        )
+        return
+    item_id, expected_run_id = int(parts[2]), int(parts[3])
     await callback.answer("Рассылка запущена")
     await clear_inline_keyboard(callback.message)
-    run = await MailingService(session).send(
-        item_id,
-        lambda uid, text, image: telegram_sender(bot, settings, uid, text, image),
-        include_telegram_ids=settings.admin_ids,
+    await callback.message.answer(
+        "Отправка выполняется. Прогресс доступен в истории.",
+        reply_markup=mailing_actions(item_id, "sending"),
     )
+    try:
+        run = await MailingService(session).send(
+            item_id,
+            lambda uid, content: telegram_sender(bot, settings, uid, content),
+            include_telegram_ids=settings.admin_ids,
+            expected_run_id=expected_run_id,
+        )
+    except ValueError as exc:
+        await callback.message.answer(str(exc), reply_markup=admin_menu())
+        return
     await callback.message.answer(mailing_report(run), reply_markup=admin_menu())
 
 
@@ -695,6 +821,8 @@ async def schedule_start(
 async def schedule_value(
     message: Message, state: FSMContext, session: AsyncSession, settings: Settings
 ):
+    if await deny(message, settings):
+        return
     data = await state.get_data()
     back = mailing_input_back(
         f"mail:input_back:{data['mailing_id']}:{data.get('list_page', 0)}"
@@ -713,22 +841,26 @@ async def schedule_value(
             message, "Время должно быть в будущем.", reply_markup=back
         )
         return
-    item = await MailingService(session).schedule(data["mailing_id"], when)
+    try:
+        item = await MailingService(session).schedule(data["mailing_id"], when)
+    except ValueError as exc:
+        await message.answer(str(exc), reply_markup=back)
+        return
     await state.clear()
-    await answer_with_buttons(
-        message,
-        f"Рассылка запланирована на {when:%d.%m.%Y %H:%M}.",
-        reply_markup=mailing_actions(
-            item.id, item.status.value, data.get("list_page", 0)
-        ),
-    )
+    item = await MailingService(session).get(item.id)
+    await message.answer(f"Рассылка запланирована на {when:%d.%m.%Y %H:%M}.")
+    await send_mailing_preview(message, item, settings, data.get("list_page", 0))
 
 
 @router.callback_query(F.data.startswith("mail:cancel:"))
 async def cancel(callback: CallbackQuery, session: AsyncSession, settings: Settings):
     if await deny(callback, settings):
         return
-    await MailingService(session).cancel(int(callback.data.rsplit(":", 1)[1]))
+    try:
+        await MailingService(session).cancel(int(callback.data.rsplit(":", 1)[1]))
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
     await clear_inline_keyboard(callback.message)
     await callback.message.answer("Рассылка отменена.")
     await callback.answer()
@@ -740,11 +872,247 @@ async def delete(callback: CallbackQuery, session: AsyncSession, settings: Setti
         return
     _, _, item_id, *page_parts = callback.data.split(":")
     list_page = int(page_parts[0]) if page_parts else 0
-    await callback.answer("Удаляю…")
-    await clear_inline_keyboard(callback.message)
     try:
         await MailingService(session).delete(int(item_id))
     except ValueError as exc:
         if str(exc) != "Рассылка не найдена":
-            raise
+            await callback.answer(str(exc), show_alert=True)
+            return
+    await callback.answer("Рассылка перенесена в архив")
+    await clear_inline_keyboard(callback.message)
     await show_mailing_list(callback.message, session, list_page)
+
+
+@router.callback_query(F.data.startswith("mail:archive_list:"))
+async def archived_mailings(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    await show_mailing_list(
+        callback.message, session, int(callback.data.rsplit(":", 1)[1]), archived=True
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mail:purge_prompt:"))
+async def prompt_purge_archived(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    _, _, item_id, page = callback.data.split(":")
+    item = await MailingService(session).get(int(item_id))
+    if item is None:
+        await callback.answer("Рассылка уже удалена", show_alert=True)
+        return
+    if item.archived_at is None:
+        await callback.answer(
+            "Окончательное удаление доступно только из архива", show_alert=True
+        )
+        return
+    await answer_with_buttons(
+        callback.message,
+        f"Удалить рассылку «{item.name}» навсегда?\n\n"
+        "Шаблон и вся история отправок будут удалены без возможности восстановления.\n"
+        "Отправленные сообщения останутся у получателей. Удалить их через бота после этого будет невозможно.",
+        reply_markup=mailing_purge_keyboard(item.id, int(page)),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mail:purge_confirm:"))
+async def purge_archived(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    _, _, item_id, page = callback.data.split(":")
+    try:
+        deleted = await MailingService(session).purge_archived(int(item_id))
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    await callback.answer(
+        "Рассылка удалена навсегда" if deleted else "Рассылка уже удалена"
+    )
+    await show_mailing_list(callback.message, session, int(page), archived=True)
+
+
+@router.callback_query(F.data.startswith("mail:history:"))
+async def mailing_history(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    _, _, item_id, page, list_page, _archived = callback.data.split(":")
+    service = MailingService(session)
+    item = await service.get(int(item_id))
+    if item is None:
+        await callback.answer("Рассылка не найдена", show_alert=True)
+        return
+    page_num = max(int(page), 0)
+    runs, has_next = await service.runs_page(item.id, page_num)
+    if not runs and page_num:
+        page_num -= 1
+        runs, has_next = await service.runs_page(item.id, page_num)
+    markup = mailing_history_keyboard(
+        item.id,
+        runs,
+        page_num,
+        has_next,
+        int(list_page),
+        item.archived_at is not None,
+        ZoneInfo(settings.timezone),
+    )
+    await answer_with_buttons(
+        callback.message,
+        f"📜 История отправок: {item.name}\n"
+        + ("Выберите запуск:" if runs else "Отправок пока нет."),
+        reply_markup=markup,
+    )
+    await callback.answer()
+
+
+async def show_mailing_run(
+    message, service, run, settings, history_page, list_page, archived
+):
+    counts, _deadline = await service.deletion_summary(run.id)
+    if run.snapshot_text is not None:
+        content = MailingContent(
+            run.snapshot_text, run.snapshot_entities or [], run.snapshot_image_file_id
+        )
+        photo = resolve_mailing_photo(content.image_file_id, settings.assets_dir)
+        if photo:
+            await message.answer_photo(
+                photo,
+                caption=content.text,
+                caption_entities=content.telegram_entities(),
+                parse_mode=None,
+            )
+        else:
+            await message.answer(
+                content.text, entities=content.telegram_entities(), parse_mode=None
+            )
+    markup = mailing_run_keyboard(
+        run,
+        history_page,
+        list_page,
+        archived,
+        counts["available"] > 0
+        and run.status != RunStatus.sending
+        and run.deletion_status != "deleting",
+    )
+    await answer_with_buttons(
+        message, mailing_run_report(run, counts, settings.timezone), reply_markup=markup
+    )
+
+
+@router.callback_query(F.data.startswith("mail:run:"))
+async def open_mailing_run(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    _, _, run_id, history_page, list_page, _archived = callback.data.split(":")
+    service = MailingService(session)
+    try:
+        run = await service.refresh_run(int(run_id))
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    item = await service.get(run.mailing_id)
+    await callback.answer()
+    await show_mailing_run(
+        callback.message,
+        service,
+        run,
+        settings,
+        int(history_page),
+        int(list_page),
+        item.archived_at is not None,
+    )
+
+
+@router.callback_query(F.data.startswith("mail:remove:"))
+async def confirm_mailing_removal(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    _, _, run_id, history_page, list_page, _archived = callback.data.split(":")
+    service = MailingService(session)
+    try:
+        run = await service.refresh_run(int(run_id))
+    except ValueError as exc:
+        await callback.answer(str(exc), show_alert=True)
+        return
+    counts, _deadline = await service.deletion_summary(run.id)
+    if (
+        not counts["available"]
+        or run.snapshot_text is None
+        or run.status == RunStatus.sending
+        or run.deletion_status == "deleting"
+    ):
+        await callback.answer(
+            "Сейчас нет сообщений, доступных для удаления. Обновите статус запуска.",
+            show_alert=True,
+        )
+        return
+    item = await service.get(run.mailing_id)
+    date = utc(run.started_at).astimezone(ZoneInfo(settings.timezone))
+    await answer_with_buttons(
+        callback.message,
+        f"Удалить сообщения запуска #{run.id} «{run.snapshot_name}» от {date:%d.%m.%Y %H:%M}?\n"
+        f"Доступно сообщений: {counts['available']}.\nОстальные запуски этой рассылки сохранятся.",
+        reply_markup=mailing_run_keyboard(
+            run,
+            int(history_page),
+            int(list_page),
+            item.archived_at is not None,
+            True,
+            confirm=True,
+        ),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mail:confirm:"))
+async def remove_mailing_messages(
+    callback: CallbackQuery, session: AsyncSession, bot: Bot, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    _, _, run_id, history_page, list_page, _archived = callback.data.split(":")
+    await callback.answer("Удаление запущено")
+    await clear_inline_keyboard(callback.message)
+    service = MailingService(session)
+    try:
+        pending_run = await service.get_run(int(run_id))
+        progress = await callback.message.answer(
+            "Удаление выполняется. Можно обновить статус запуска.",
+            reply_markup=mailing_run_keyboard(
+                pending_run,
+                int(history_page),
+                int(list_page),
+                bool(int(_archived)),
+                False,
+            ),
+        )
+        run = await service.delete_messages(
+            int(run_id),
+            lambda chat_id, message_id: bot.delete_message(chat_id, message_id),
+        )
+    except ValueError as exc:
+        await callback.message.answer(str(exc), reply_markup=admin_menu())
+        return
+    item = await service.get(run.mailing_id)
+    await show_mailing_run(
+        progress,
+        service,
+        run,
+        settings,
+        int(history_page),
+        int(list_page),
+        item.archived_at is not None,
+    )

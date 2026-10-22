@@ -1,19 +1,16 @@
 import io
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Awaitable, Callable, Collection, Literal
+from typing import Literal
 
 import qrcode
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.iiko.client import IikoClient
 from app.integrations.iiko.exceptions import IikoError
-from app.models.entities import MailingStatus, MailingType, RunStatus
 from app.repositories import (
     ApplicationSettingRepository,
     LoyaltyAccountRepository,
-    MailingRepository,
     PurchaseRepository,
     RestaurantRepository,
     UserRepository,
@@ -387,128 +384,3 @@ class SyncService:
             result.imported,
         )
         return result
-
-
-class MailingService:
-    def __init__(self, session: AsyncSession):
-        self.session = session
-
-    async def create(self, name: str, text: str, image_file_id: str | None = None):
-        item = await MailingRepository(self.session).create(
-            name=name,
-            text=text,
-            image_file_id=image_file_id,
-            type=MailingType.manual,
-            status=MailingStatus.draft,
-        )
-        await self.session.commit()
-        return item
-
-    async def update(self, item_id: int, **changes):
-        item = await MailingRepository(self.session).get(item_id)
-        if not item:
-            raise ValueError("Рассылка не найдена")
-        if item.status == MailingStatus.sending:
-            raise ValueError("Нельзя редактировать рассылку во время отправки")
-        reset_to_draft = (
-            item.status
-            in (MailingStatus.sent, MailingStatus.cancelled, MailingStatus.failed)
-            and "status" not in changes
-        )
-        for key, value in changes.items():
-            setattr(item, key, value)
-        if reset_to_draft:
-            item.status = MailingStatus.draft
-            item.scheduled_at = None
-        await self.session.commit()
-        return item
-
-    async def schedule(self, item_id: int, when: datetime):
-        return await self.update(
-            item_id,
-            scheduled_at=when,
-            type=MailingType.scheduled,
-            status=MailingStatus.scheduled,
-        )
-
-    async def cancel(self, item_id: int):
-        return await self.update(item_id, status=MailingStatus.cancelled)
-
-    async def delete(self, item_id: int):
-        repo = MailingRepository(self.session)
-        item = await repo.get(item_id)
-        if not item:
-            raise ValueError("Рассылка не найдена")
-        if item.status == MailingStatus.sending:
-            raise ValueError("Нельзя удалить рассылку во время отправки")
-        await repo.delete(item)
-        await self.session.commit()
-
-    async def list(self):
-        return await MailingRepository(self.session).list()
-
-    async def page(self, page: int, size: int = 6):
-        return await MailingRepository(self.session).page(page, size)
-
-    async def get(self, item_id: int):
-        return await MailingRepository(self.session).get(item_id)
-
-    async def send(
-        self,
-        item_id: int,
-        sender: Callable[[int, str, str | None], Awaitable[None]],
-        include_telegram_ids: Collection[int] = (),
-    ):
-        repo = MailingRepository(self.session)
-        item = await repo.get(item_id)
-        if not item:
-            raise ValueError("Рассылка не найдена")
-        audience = await UserRepository(self.session).mailing_audience()
-        admin_ids = set(include_telegram_ids)
-        recipients = [
-            user.telegram_id
-            for user in audience
-            if user.is_active or user.telegram_id in admin_ids
-        ]
-        recipient_ids = set(recipients)
-        recipients.extend(sorted(admin_ids - recipient_ids))
-        summary = dict(
-            total_users=len(audience),
-            included_admins=len(admin_ids),
-            excluded_inactive=sum(
-                not user.is_active and user.telegram_id not in admin_ids
-                for user in audience
-            ),
-        )
-        now = datetime.now(timezone.utc)
-        item.status = MailingStatus.sending
-        run = await repo.add_run(
-            mailing_id=item.id,
-            total_count=len(recipients),
-            audience_summary=summary,
-            sent_count=0,
-            failed_count=0,
-            status=RunStatus.sending,
-            started_at=now,
-        )
-        await self.session.commit()
-        try:
-            for telegram_id in recipients:
-                try:
-                    await sender(telegram_id, item.text, item.image_file_id)
-                    run.sent_count += 1
-                except Exception:
-                    run.failed_count += 1
-                    logger.exception(
-                        "Mailing delivery failed telegram_id=%s", telegram_id
-                    )
-            run.status = RunStatus.sent
-            item.status = MailingStatus.sent
-        except Exception as exc:
-            run.status = RunStatus.failed
-            item.status = MailingStatus.failed
-            run.error = str(exc)[:2000]
-            logger.exception("Mailing failed id=%s", item.id)
-        run.finished_at = datetime.now(timezone.utc)
-        await self.session.commit()
-        return run

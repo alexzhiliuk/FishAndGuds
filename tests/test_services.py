@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -39,8 +40,13 @@ async def test_mailing_includes_admins_and_freezes_audience_counts(session):
     mailing = await MailingService(session).create("Test", "Hello")
     recipients = []
 
-    async def sender(uid, text, image):
+    async def sender(uid, content):
         recipients.append(uid)
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=uid),
+            message_id=100,
+            date=datetime.now(timezone.utc),
+        )
 
     run = await MailingService(session).send(
         mailing.id, sender, include_telegram_ids=(100, 999)
@@ -538,9 +544,14 @@ async def test_mailing_includes_admin_and_counts_failures(session):
     service = MailingService(session)
     item = await service.create("Promo", "Hello")
 
-    async def sender(uid, text, image):
+    async def sender(uid, content):
         if uid == 3:
             raise RuntimeError("blocked")
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=uid),
+            message_id=100,
+            date=datetime.now(timezone.utc),
+        )
 
     run = await service.send(item.id, sender, include_telegram_ids=(1,))
     assert (run.total_count, run.sent_count, run.failed_count) == (3, 2, 1)
@@ -567,8 +578,13 @@ async def test_telegram_mailing_does_not_check_notification_preferences(session)
     item = await MailingService(session).create("Promo", "Hello")
     recipients = []
 
-    async def sender(uid, text, image):
+    async def sender(uid, content):
         recipients.append(uid)
+        return SimpleNamespace(
+            chat=SimpleNamespace(id=uid),
+            message_id=100,
+            date=datetime.now(timezone.utc),
+        )
 
     run = await MailingService(session).send(item.id, sender)
     assert recipients == [10, 11]
@@ -576,14 +592,18 @@ async def test_telegram_mailing_does_not_check_notification_preferences(session)
 
 
 @pytest.mark.asyncio
-async def test_sent_mailing_edit_resets_to_draft_and_delete_works(session):
+async def test_sent_mailing_edit_resets_to_draft_and_archive_preserves_history(session):
     service = MailingService(session)
     item = await service.create("Old", "Original")
 
-    async def sender(uid, text, image):
+    async def sender(uid, content):
         return None
 
     await service.send(item.id, sender)
     assert (await service.update(item.id, text="Updated")).status.value == "draft"
     await service.delete(item.id)
-    assert await MailingRepository(session).get(item.id) is None
+    saved = await MailingRepository(session).get(item.id)
+    assert saved.archived_at is not None
+    assert len(saved.runs) == 1
+    assert saved.runs[0].snapshot_text == "Original"
+    assert (await service.page(0))[0] == []

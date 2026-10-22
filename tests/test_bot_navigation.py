@@ -51,7 +51,7 @@ async def test_immediate_mailing_includes_admins_and_shows_breakdown(monkeypatch
     monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
     monkeypatch.setattr(admin_handlers, "clear_inline_keyboard", AsyncMock())
     callback = SimpleNamespace(
-        data="mail:send:7",
+        data="mail:send:7:0",
         from_user=SimpleNamespace(id=42),
         answer=AsyncMock(),
         message=SimpleNamespace(answer=AsyncMock()),
@@ -67,7 +67,7 @@ async def test_immediate_mailing_includes_admins_and_shows_breakdown(monkeypatch
     assert "Получателей: 12" in report
 
 
-async def test_open_mailing_shows_latest_saved_report(monkeypatch):
+async def test_open_mailing_shows_preview_without_saved_report(monkeypatch):
     from datetime import timezone
 
     runs = [
@@ -96,7 +96,7 @@ async def test_open_mailing_shows_latest_saved_report(monkeypatch):
         callback, object(), SimpleNamespace(admin_ids=(42,))
     )
     preview.assert_awaited_once()
-    assert "Получателей: 2" in callback.message.answer.await_args.args[0]
+    callback.message.answer.assert_not_awaited()
 
 
 def test_restaurant_button_names_use_public_branding():
@@ -691,8 +691,9 @@ def test_sent_mailing_remains_editable_and_resendable():
         "mail:edit_name:7:0",
         "mail:edit_text:7:0",
         "mail:edit_image:7:0",
-        "mail:send:7",
+        "mail:send:7:0",
         "mail:schedule:7:0",
+        "mail:history:7:0:0:0",
         "mail:delete:7:0",
         "admin:list_back:0",
     ]
@@ -761,7 +762,7 @@ async def test_delete_mailing_returns_to_originating_list_page(monkeypatch):
 
     service.delete.assert_awaited_once_with(7)
     show_list.assert_awaited_once_with(message, session, 2)
-    callback.answer.assert_awaited_once_with("Удаляю…")
+    callback.answer.assert_awaited_once_with("Рассылка перенесена в архив")
 
 
 @pytest.mark.asyncio
@@ -798,6 +799,7 @@ def test_mailing_name_list_has_selection_and_pagination():
         "mail:open:6:1",
         "admin:list:0",
         "admin:list:2",
+        "mail:archive_list:0",
         "admin:back",
     ]
 
@@ -1154,5 +1156,9 @@ async def test_mailing_list_shows_compact_names_before_preview(monkeypatch):
     service.page.assert_awaited_once_with(0)
     message.answer.assert_awaited_once()
     markup = message.answer.await_args.kwargs["reply_markup"]
-    assert callback_data(markup) == ["mail:open:5:0", "admin:back"]
+    assert callback_data(markup) == [
+        "mail:open:5:0",
+        "mail:archive_list:0",
+        "admin:back",
+    ]
     message.edit_text.assert_not_awaited()
