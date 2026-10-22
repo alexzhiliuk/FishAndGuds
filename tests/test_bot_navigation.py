@@ -694,7 +694,7 @@ def test_sent_mailing_remains_editable_and_resendable():
         "mail:send:7:0",
         "mail:schedule:7:0",
         "mail:history:7:0:0:0",
-        "mail:delete:7:0",
+        "mail:archive:7:0",
         "admin:list_back:0",
     ]
 
@@ -711,7 +711,7 @@ def test_mailing_edit_actions_preserve_list_page():
     assert "mail:edit_text:7:2" in actions
     assert "mail:edit_image:7:2" in actions
     assert "mail:schedule:7:2" in actions
-    assert "mail:delete:7:2" in actions
+    assert "mail:archive:7:2" in actions
     assert "admin:list_back:2" in actions
 
 
@@ -743,14 +743,14 @@ async def test_mailing_input_back_clears_state_and_returns_to_preview(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_delete_mailing_returns_to_originating_list_page(monkeypatch):
-    service = SimpleNamespace(delete=AsyncMock())
+async def test_archive_mailing_returns_to_originating_list_page(monkeypatch):
+    service = SimpleNamespace(archive=AsyncMock())
     show_list = AsyncMock()
     monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
     monkeypatch.setattr(admin_handlers, "show_mailing_list", show_list)
     message = SimpleNamespace()
     callback = SimpleNamespace(
-        data="mail:delete:7:2",
+        data="mail:archive:7:2",
         from_user=SimpleNamespace(id=42),
         message=message,
         answer=AsyncMock(),
@@ -758,24 +758,24 @@ async def test_delete_mailing_returns_to_originating_list_page(monkeypatch):
     settings = SimpleNamespace(admin_ids=(42,))
     session = object()
 
-    await admin_handlers.delete(callback, session, settings)
+    await admin_handlers.archive(callback, session, settings)
 
-    service.delete.assert_awaited_once_with(7)
+    service.archive.assert_awaited_once_with(7)
     show_list.assert_awaited_once_with(message, session, 2)
     callback.answer.assert_awaited_once_with("Рассылка перенесена в архив")
 
 
 @pytest.mark.asyncio
-async def test_retried_delete_of_missing_mailing_still_returns_to_list(monkeypatch):
+async def test_retried_archive_of_missing_mailing_still_returns_to_list(monkeypatch):
     service = SimpleNamespace(
-        delete=AsyncMock(side_effect=ValueError("Рассылка не найдена"))
+        archive=AsyncMock(side_effect=ValueError("Рассылка не найдена"))
     )
     show_list = AsyncMock()
     monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
     monkeypatch.setattr(admin_handlers, "show_mailing_list", show_list)
     message = SimpleNamespace()
     callback = SimpleNamespace(
-        data="mail:delete:7:1",
+        data="mail:archive:7:1",
         from_user=SimpleNamespace(id=42),
         message=message,
         answer=AsyncMock(),
@@ -783,7 +783,7 @@ async def test_retried_delete_of_missing_mailing_still_returns_to_list(monkeypat
     settings = SimpleNamespace(admin_ids=(42,))
     session = object()
 
-    await admin_handlers.delete(callback, session, settings)
+    await admin_handlers.archive(callback, session, settings)
 
     show_list.assert_awaited_once_with(message, session, 1)
 

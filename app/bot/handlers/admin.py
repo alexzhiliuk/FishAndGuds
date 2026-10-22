@@ -551,7 +551,7 @@ async def create_image(
     if await deny(message, settings):
         return
     image = message.photo[-1].file_id if message.photo else None
-    if not image and (message.text or "").lower() not in {"без фото", "нет", "-"}:
+    if not image:
         await answer_with_buttons(
             message,
             "Отправьте фото или нажмите «Без фото».",
@@ -761,12 +761,6 @@ async def edit_value(
     await send_mailing_preview(message, item, settings, data.get("list_page", 0))
 
 
-async def telegram_sender(
-    bot: Bot, settings: Settings, telegram_id: int, content: MailingContent
-):
-    return await send_mailing(bot, settings, telegram_id, content)
-
-
 @router.callback_query(F.data.startswith("mail:send:"))
 async def send_now(
     callback: CallbackQuery, session: AsyncSession, bot: Bot, settings: Settings
@@ -789,7 +783,7 @@ async def send_now(
     try:
         run = await MailingService(session).send(
             item_id,
-            lambda uid, content: telegram_sender(bot, settings, uid, content),
+            lambda uid, content: send_mailing(bot, settings, uid, content),
             include_telegram_ids=settings.admin_ids,
             expected_run_id=expected_run_id,
         )
@@ -866,14 +860,14 @@ async def cancel(callback: CallbackQuery, session: AsyncSession, settings: Setti
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("mail:delete:"))
-async def delete(callback: CallbackQuery, session: AsyncSession, settings: Settings):
+@router.callback_query(F.data.startswith("mail:archive:"))
+async def archive(callback: CallbackQuery, session: AsyncSession, settings: Settings):
     if await deny(callback, settings):
         return
     _, _, item_id, *page_parts = callback.data.split(":")
     list_page = int(page_parts[0]) if page_parts else 0
     try:
-        await MailingService(session).delete(int(item_id))
+        await MailingService(session).archive(int(item_id))
     except ValueError as exc:
         if str(exc) != "Рассылка не найдена":
             await callback.answer(str(exc), show_alert=True)

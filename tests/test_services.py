@@ -601,7 +601,7 @@ async def test_sent_mailing_edit_resets_to_draft_and_archive_preserves_history(s
 
     await service.send(item.id, sender)
     assert (await service.update(item.id, text="Updated")).status.value == "draft"
-    await service.delete(item.id)
+    await service.archive(item.id)
     saved = await MailingRepository(session).get(item.id)
     assert saved.archived_at is not None
     assert len(saved.runs) == 1

@@ -72,7 +72,7 @@ async def test_snapshots_and_deliveries_survive_edits_user_removal_and_archive(s
     assert (second.snapshot_text, second.snapshot_image_file_id) == ("Новое", "photo")
     assert second.snapshot_entities[0]["url"] == "https://new.example"
     await UserRepository(session).delete_by_telegram_id(1)
-    await service.delete(item.id)
+    await service.archive(item.id)
     archived = await MailingRepository(session).get(item.id)
     assert archived.archived_at is not None
     assert {r.id for r in archived.runs} == {first.id, second.id}
@@ -115,7 +115,7 @@ async def test_send_lock_and_consumed_button_prevent_duplicate_runs(session):
             another = MailingService(other)
             for action in (
                 lambda: another.send(item.id, successful_sender, expected_run_id=0),
-                lambda: another.delete(item.id),
+                lambda: another.archive(item.id),
                 lambda: another.update(item.id, text="Новый"),
             ):
                 with pytest.raises(MailingBusy):
@@ -137,7 +137,7 @@ async def test_scheduled_send_and_archive_cancel_stale_scheduler_work(session):
     with pytest.raises(ValueError, match="уже выполнена"):
         await service.send(item.id, successful_sender, scheduled=True)
     await service.schedule(item.id, datetime.now(timezone.utc) - timedelta(minutes=1))
-    await service.delete(item.id)
+    await service.archive(item.id)
     assert item.status == MailingStatus.cancelled
     assert item.scheduled_at is None
     assert await MailingRepository(session).due(datetime.now(timezone.utc)) == []
@@ -301,7 +301,7 @@ async def test_deletion_interruption_and_duplicate_operations(session):
         with pytest.raises(MailingBusy):
             await service.delete_messages(run.id, AsyncMock())
         with pytest.raises(MailingBusy):
-            await service.delete(item.id)
+            await service.archive(item.id)
     finally:
         release.set()
         with pytest.raises(asyncio.CancelledError):
@@ -387,7 +387,7 @@ async def test_permanent_deletion_removes_history_and_disables_old_message_delet
     item_id, run_id = item.id, run.id
     with pytest.raises(ValueError, match="только из архива"):
         await service.purge_archived(item_id)
-    await service.delete(item_id)
+    await service.archive(item_id)
     assert await service.purge_archived(item_id)
     assert await service.get(item_id) is None
     assert (await service.runs_page(item_id))[0] == []
@@ -405,7 +405,7 @@ async def test_permanent_deletion_removes_history_and_disables_old_message_delet
 
 async def test_permanent_deletion_is_blocked_while_message_removal_is_running(session):
     service, item, run = await create_run(session, (1,))
-    await service.delete(item.id)
+    await service.archive(item.id)
     entered, release = asyncio.Event(), asyncio.Event()
 
     async def deleter(chat, message):

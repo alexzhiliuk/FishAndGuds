@@ -160,8 +160,7 @@ class MailingService:
             item_id, scheduled_at=None, status=MailingStatus.cancelled
         )
 
-    async def delete(self, item_id: int):
-        # Keep the old service entrypoint safe for stale callback buttons.
+    async def archive(self, item_id: int):
         async with mailing_operation(self.session, item_id):
             item = await self._item(item_id)
             await self._recover(item)
@@ -171,9 +170,6 @@ class MailingService:
                 if item.status == MailingStatus.scheduled:
                     item.status = MailingStatus.cancelled
                 await self.session.commit()
-
-    async def list(self):
-        return await MailingRepository(self.session).list()
 
     async def purge_archived(self, item_id: int) -> bool:
         """Erase the archived template and delivery IDs without calling Telegram."""

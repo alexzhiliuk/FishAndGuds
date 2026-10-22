@@ -101,7 +101,7 @@ def test_button_navigation_preserves_history_archive_and_list_pages():
         (admin.open_mailing_run, "mail:run:1:0:0:0", False),
         (admin.confirm_mailing_removal, "mail:remove:1:0:0:0", False),
         (admin.remove_mailing_messages, "mail:confirm:1:0:0:0", True),
-        (admin.delete, "mail:delete:1:0", False),
+        (admin.archive, "mail:archive:1:0", False),
         (admin.send_now, "mail:send:1:0", True),
     ],
 )
@@ -132,7 +132,7 @@ async def test_archive_pages_contain_five_items_and_only_admin_menu_back(
     for index in range(11):
         item = await service.create(f"Архив {index}", "Текст")
         archived_ids.append(item.id)
-        await service.delete(item.id)
+        await service.archive(item.id)
     active = await service.create("Активная", "Текст")
     seen = []
     for page, expected_size in ((0, 5), (1, 5), (2, 1)):
@@ -254,8 +254,9 @@ async def test_without_photo_button_creates_text_mailing_and_rejects_stale_click
     assert cb.answer.await_args.kwargs["show_alert"]
 
 
+@pytest.mark.parametrize("invalid_text", ["без фото", "нет", "-", "не изображение"])
 async def test_image_step_offers_red_cross_button_and_keeps_it_on_invalid_input(
-    session, tmp_path
+    session, tmp_path, invalid_text
 ):
     state = SimpleNamespace(update_data=AsyncMock(), set_state=AsyncMock())
     incoming = message()
@@ -265,9 +266,10 @@ async def test_image_step_offers_red_cross_button_and_keeps_it_on_invalid_input(
     markup = incoming.answer.await_args.kwargs["reply_markup"]
     assert markup.inline_keyboard[0][0].text == "❌ Без фото"
     assert actions(markup) == ["mail:without_photo", "mail:create_back"]
-    incoming.text = "не изображение"
+    incoming.text = invalid_text
     await admin.create_image(incoming, state, session, settings(tmp_path))
     assert actions(incoming.answer.await_args.kwargs["reply_markup"]) == actions(markup)
+    assert (await MailingService(session).page(0))[0] == []
 
 
 async def test_permanent_deletion_requires_confirmation_and_returns_to_archive(
@@ -275,7 +277,7 @@ async def test_permanent_deletion_requires_confirmation_and_returns_to_archive(
 ):
     service, item, run = await create_run(session)
     item_id, run_id = item.id, run.id
-    await service.delete(item_id)
+    await service.archive(item_id)
     cb = callback(f"mail:purge_prompt:{item_id}:2")
     await admin.prompt_purge_archived(cb, session, settings(tmp_path))
     prompt = cb.message.answer.await_args

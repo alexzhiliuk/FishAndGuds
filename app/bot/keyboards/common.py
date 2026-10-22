@@ -406,7 +406,8 @@ def mailing_actions(
         rows.append(
             [
                 InlineKeyboardButton(
-                    text="🗃 В архив", callback_data=f"mail:delete:{item_id}:{list_page}"
+                    text="🗃 В архив",
+                    callback_data=f"mail:archive:{item_id}:{list_page}",
                 )
             ]
         )

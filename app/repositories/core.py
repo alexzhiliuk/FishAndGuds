@@ -405,17 +405,6 @@ class MailingRepository:
             .execution_options(populate_existing=True)
         )
 
-    async def list(self):
-        return list(
-            (
-                await self.session.scalars(
-                    select(Mailing)
-                    .options(selectinload(Mailing.runs))
-                    .order_by(Mailing.created_at.desc())
-                )
-            ).all()
-        )
-
     async def page(self, page: int, size: int, archived: bool = False):
         stmt = (
             select(Mailing)
