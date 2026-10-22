@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot, F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InputMediaPhoto, Message
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot.keyboards.common import (
@@ -29,7 +29,6 @@ from app.bot.media import resolve_mailing_photo
 from app.bot.mailing_report import mailing_report, mailing_run_report
 from app.bot.mailing_transport import send_mailing
 from app.bot.navigation import (
-    answer_photo_with_buttons,
     answer_with_buttons,
     clear_inline_keyboard,
 )
@@ -51,6 +50,7 @@ from app.services import (
 from app.services.mailing_content import (
     MailingContent,
     normalize_mailing_content,
+    utf16_length,
     validate_mailing_content,
 )
 from app.services.mailings import utc
@@ -88,37 +88,58 @@ async def deny(event, settings):
     return True
 
 
-async def send_mailing_preview(
-    message: Message, item, settings: Settings, list_page: int = 0
-):
-    """Render a mailing exactly as a recipient will see it, plus admin actions."""
+def mailing_item_actions(item, list_page: int):
     latest = max((run.id for run in getattr(item, "runs", [])), default=0)
-    reply_markup = mailing_actions(
+    return mailing_actions(
         item.id,
         item.status.value,
         list_page,
         latest,
         bool(getattr(item, "archived_at", None)),
     )
+
+
+async def show_mailing_card(message: Message, item, list_page: int = 0):
+    await answer_with_buttons(
+        message,
+        f"Рассылка «{item.name}»",
+        reply_markup=mailing_item_actions(item, list_page),
+        parse_mode=None,
+    )
+
+
+async def send_mailing_preview(
+    message: Message, item, settings: Settings, list_page: int = 0
+):
+    """Expand the text beneath the heading in the existing mailing card."""
+    reply_markup = mailing_item_actions(item, list_page)
     content = normalize_mailing_content(
         item.text, getattr(item, "entities", None), item.image_file_id
     )
+    heading = f"Рассылка «{item.name}»\n\n"
+    text = heading + content.text
+    entities = [
+        entity.model_copy(update={"offset": entity.offset + utf16_length(heading)})
+        for entity in content.telegram_entities()
+    ]
+    if (
+        getattr(message, "text", None) == text
+        or getattr(message, "caption", None) == text
+    ):
+        return
     photo = resolve_mailing_photo(item.image_file_id, settings.assets_dir)
     if photo:
-        await answer_photo_with_buttons(
-            message,
-            photo,
-            content.text,
+        await message.edit_media(
+            media=InputMediaPhoto(
+                media=photo, caption=text, caption_entities=entities, parse_mode=None
+            ),
             reply_markup=reply_markup,
-            caption_entities=content.telegram_entities(),
-            parse_mode=None,
         )
     else:
-        await answer_with_buttons(
-            message,
-            content.text,
+        await message.edit_text(
+            text,
             reply_markup=reply_markup,
-            entities=content.telegram_entities(),
+            entities=entities,
             parse_mode=None,
         )
 
@@ -660,8 +681,23 @@ async def open_mailing(
     if not item:
         await callback.answer("Рассылка не найдена", show_alert=True)
         return
-    await send_mailing_preview(callback.message, item, settings, int(page))
+    await show_mailing_card(callback.message, item, int(page))
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mail:preview:"))
+async def preview_mailing(
+    callback: CallbackQuery, session: AsyncSession, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    _, _, item_id, page = callback.data.split(":")
+    item = await MailingService(session).get(int(item_id))
+    if not item:
+        await callback.answer("Рассылка не найдена", show_alert=True)
+        return
+    await callback.answer()
+    await send_mailing_preview(callback.message, item, settings, int(page))
 
 
 @router.callback_query(F.data.startswith("mail:edit_"))
@@ -714,7 +750,7 @@ async def mailing_input_cancel(
     if not item:
         await callback.answer("Рассылка не найдена", show_alert=True)
         return
-    await send_mailing_preview(callback.message, item, settings, int(page))
+    await show_mailing_card(callback.message, item, int(page))
     await callback.answer()
 
 
@@ -758,7 +794,7 @@ async def edit_value(
     await state.clear()
     item = await MailingService(session).get(item.id)
     await message.answer("Рассылка обновлена.")
-    await send_mailing_preview(message, item, settings, data.get("list_page", 0))
+    await show_mailing_card(message, item, data.get("list_page", 0))
 
 
 @router.callback_query(F.data.startswith("mail:send:"))
@@ -843,7 +879,7 @@ async def schedule_value(
     await state.clear()
     item = await MailingService(session).get(item.id)
     await message.answer(f"Рассылка запланирована на {when:%d.%m.%Y %H:%M}.")
-    await send_mailing_preview(message, item, settings, data.get("list_page", 0))
+    await show_mailing_card(message, item, data.get("list_page", 0))
 
 
 @router.callback_query(F.data.startswith("mail:cancel:"))

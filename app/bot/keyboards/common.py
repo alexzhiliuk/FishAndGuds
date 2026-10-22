@@ -356,7 +356,14 @@ def mailing_actions(
     latest_run_id: int = 0,
     archived: bool = False,
 ):
-    rows = []
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="👁 Показать текст",
+                callback_data=f"mail:preview:{item_id}:{list_page}",
+            )
+        ]
+    ]
     if status != "sending" and not archived:
         rows += [
             [

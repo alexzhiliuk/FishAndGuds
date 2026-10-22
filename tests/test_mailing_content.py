@@ -94,6 +94,7 @@ async def test_preview_and_transport_have_identical_content(tmp_path, photo):
     settings = SimpleNamespace(assets_dir=tmp_path)
     item = SimpleNamespace(
         id=1,
+        name="Тест",
         status=SimpleNamespace(value="draft"),
         text=content.text,
         entities=content.entities,
@@ -102,19 +103,27 @@ async def test_preview_and_transport_have_identical_content(tmp_path, photo):
         archived_at=None,
     )
     message = SimpleNamespace(
-        reply_markup=None, answer=AsyncMock(), answer_photo=AsyncMock()
+        reply_markup=None, edit_text=AsyncMock(), edit_media=AsyncMock()
     )
     bot = SimpleNamespace(send_message=AsyncMock(), send_photo=AsyncMock())
     await send_mailing_preview(message, item, settings)
     await send_mailing(bot, settings, 42, content)
     if photo:
-        preview = message.answer_photo.await_args
+        preview = message.edit_media.await_args
+        media = preview.kwargs["media"]
         sent = bot.send_photo.await_args
-        assert preview.kwargs["caption"] == sent.kwargs["caption"] == content.text
-        assert preview.kwargs["caption_entities"] == sent.kwargs["caption_entities"]
+        assert media.caption == "Рассылка «Тест»\n\n" + sent.kwargs["caption"]
+        preview_entities = media.caption_entities
+        sent_entities = sent.kwargs["caption_entities"]
+        assert media.parse_mode is sent.kwargs["parse_mode"] is None
     else:
-        preview = message.answer.await_args
+        preview = message.edit_text.await_args
         sent = bot.send_message.await_args
-        assert preview.args[0] == sent.args[1] == content.text
-        assert preview.kwargs["entities"] == sent.kwargs["entities"]
-    assert preview.kwargs["parse_mode"] is sent.kwargs["parse_mode"] is None
+        assert preview.args[0] == "Рассылка «Тест»\n\n" + sent.args[1]
+        preview_entities = preview.kwargs["entities"]
+        sent_entities = sent.kwargs["entities"]
+        assert preview.kwargs["parse_mode"] is sent.kwargs["parse_mode"] is None
+    assert sent_entities == content.telegram_entities()
+    assert preview_entities[0].offset == sent_entities[0].offset + 17
+    assert preview_entities[0].url == sent_entities[0].url
+    assert preview_entities[0].length == sent_entities[0].length

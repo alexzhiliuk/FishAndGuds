@@ -23,7 +23,11 @@ def actions(markup):
 
 def message():
     return SimpleNamespace(
-        reply_markup=None, answer=AsyncMock(), answer_photo=AsyncMock()
+        reply_markup=None,
+        answer=AsyncMock(),
+        answer_photo=AsyncMock(),
+        edit_text=AsyncMock(),
+        edit_media=AsyncMock(),
     )
 
 
@@ -82,6 +86,7 @@ def test_button_navigation_preserves_history_archive_and_list_pages():
     assert confirm == ["mail:confirm:22:3:2:1", "mail:run:22:3:2:1"]
     archived_actions = actions(mailing_actions(7, "sent", 2, 22, archived=True))
     assert archived_actions == [
+        "mail:preview:7:2",
         "mail:history:7:0:2:1",
         "mail:purge_prompt:7:2",
         "mail:archive_list:2",
@@ -103,6 +108,7 @@ def test_button_navigation_preserves_history_archive_and_list_pages():
         (admin.remove_mailing_messages, "mail:confirm:1:0:0:0", True),
         (admin.archive, "mail:archive:1:0", False),
         (admin.send_now, "mail:send:1:0", True),
+        (admin.preview_mailing, "mail:preview:1:0", False),
     ],
 )
 async def test_every_management_callback_checks_admin_rights(
@@ -122,6 +128,63 @@ async def test_legacy_send_button_requires_reopening(tmp_path):
     await admin.send_now(cb, object(), object(), settings(tmp_path))
     assert cb.answer.await_args.kwargs["show_alert"]
     cb.message.answer.assert_not_awaited()
+
+
+@pytest.mark.parametrize("archived", [False, True])
+@pytest.mark.parametrize("with_photo", [False, True])
+async def test_mailing_content_is_requested_from_card_with_same_actions(
+    session, tmp_path, archived, with_photo
+):
+    service = MailingService(session)
+    (tmp_path / "promo.jpg").write_bytes(b"image")
+    item = await service.create(
+        "Новое меню",
+        "🐟 [Меню](https://example.com/menu)",
+        "asset:promo.jpg" if with_photo else None,
+    )
+    if archived:
+        await service.archive(item.id)
+    action = "archived" if archived else "open"
+    card = callback(f"mail:{action}:{item.id}:2")
+    await admin.open_mailing(card, session, settings(tmp_path))
+    card.message.answer.assert_awaited_once()
+    assert card.message.answer.await_args.args[0] == "Рассылка «Новое меню»"
+    card.message.answer_photo.assert_not_awaited()
+    markup = card.message.answer.await_args.kwargs["reply_markup"]
+    assert f"mail:preview:{item.id}:2" in actions(markup)
+
+    preview = callback(f"mail:preview:{item.id}:2")
+    await admin.preview_mailing(preview, session, settings(tmp_path))
+    sent = preview.message.edit_media if with_photo else preview.message.edit_text
+    sent.assert_awaited_once()
+    if with_photo:
+        media = sent.await_args.kwargs["media"]
+        assert media.caption == "Рассылка «Новое меню»\n\n🐟 Меню"
+        entities = media.caption_entities
+    else:
+        assert sent.await_args.args[0] == "Рассылка «Новое меню»\n\n🐟 Меню"
+        entities = sent.await_args.kwargs["entities"]
+    assert entities[0].url == "https://example.com/menu"
+    assert entities[0].offset == 26
+    assert sent.await_args.kwargs["reply_markup"] == markup
+    preview.message.answer.assert_not_awaited()
+    preview.message.answer_photo.assert_not_awaited()
+
+    if with_photo:
+        preview.message.caption = media.caption
+    else:
+        preview.message.text = sent.await_args.args[0]
+    await admin.preview_mailing(preview, session, settings(tmp_path))
+    sent.assert_awaited_once()
+
+    if not archived:
+        await service.archive(item.id)
+    await service.purge_archived(item.id)
+    stale = callback(f"mail:preview:{item.id}:2")
+    await admin.preview_mailing(stale, session, settings(tmp_path))
+    stale.answer.assert_awaited_once_with("Рассылка не найдена", show_alert=True)
+    stale.message.answer.assert_not_awaited()
+    stale.message.answer_photo.assert_not_awaited()
 
 
 async def test_archive_pages_contain_five_items_and_only_admin_menu_back(

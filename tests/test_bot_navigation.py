@@ -67,7 +67,7 @@ async def test_immediate_mailing_includes_admins_and_shows_breakdown(monkeypatch
     assert "Получателей: 12" in report
 
 
-async def test_open_mailing_shows_preview_without_saved_report(monkeypatch):
+async def test_open_mailing_shows_card_without_saved_report(monkeypatch):
     from datetime import timezone
 
     runs = [
@@ -85,7 +85,7 @@ async def test_open_mailing_shows_preview_without_saved_report(monkeypatch):
     service = SimpleNamespace(get=AsyncMock(return_value=item))
     preview = AsyncMock()
     monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
-    monkeypatch.setattr(admin_handlers, "send_mailing_preview", preview)
+    monkeypatch.setattr(admin_handlers, "show_mailing_card", preview)
     callback = SimpleNamespace(
         data="mail:open:7:0",
         from_user=SimpleNamespace(id=42),
@@ -688,6 +688,7 @@ def test_booking_prefers_iiko_website_and_falls_back_to_admin():
 def test_sent_mailing_remains_editable_and_resendable():
     actions = callback_data(mailing_actions(7, "sent"))
     assert actions == [
+        "mail:preview:7:0",
         "mail:edit_name:7:0",
         "mail:edit_text:7:0",
         "mail:edit_image:7:0",
@@ -716,12 +717,12 @@ def test_mailing_edit_actions_preserve_list_page():
 
 
 @pytest.mark.asyncio
-async def test_mailing_input_back_clears_state_and_returns_to_preview(monkeypatch):
+async def test_mailing_input_back_clears_state_and_returns_to_card(monkeypatch):
     item = SimpleNamespace(id=7, status=SimpleNamespace(value="draft"))
     service = SimpleNamespace(get=AsyncMock(return_value=item))
     preview = AsyncMock()
     monkeypatch.setattr(admin_handlers, "MailingService", lambda session: service)
-    monkeypatch.setattr(admin_handlers, "send_mailing_preview", preview)
+    monkeypatch.setattr(admin_handlers, "show_mailing_card", preview)
     message = SimpleNamespace(delete=AsyncMock())
     callback = SimpleNamespace(
         data="mail:input_back:7:2",
@@ -738,7 +739,7 @@ async def test_mailing_input_back_clears_state_and_returns_to_preview(monkeypatc
 
     state.clear.assert_awaited_once_with()
     message.delete.assert_not_awaited()
-    preview.assert_awaited_once_with(message, item, settings, 2)
+    preview.assert_awaited_once_with(message, item, 2)
     callback.answer.assert_awaited_once_with()
 
 
@@ -1121,9 +1122,10 @@ async def test_unregistered_user_unknown_text_gets_contact_prompt(monkeypatch):
 async def test_admin_mailing_preview_uses_photo_and_original_text(tmp_path):
     image = tmp_path / "promo.jpg"
     image.write_bytes(b"image")
-    message = SimpleNamespace(answer_photo=AsyncMock(), answer=AsyncMock())
+    message = SimpleNamespace(edit_media=AsyncMock(), answer=AsyncMock())
     item = SimpleNamespace(
         id=5,
+        name="Новое меню",
         text="Текст для получателя",
         image_file_id="asset:promo.jpg",
         status=SimpleNamespace(value="draft"),
@@ -1132,8 +1134,9 @@ async def test_admin_mailing_preview_uses_photo_and_original_text(tmp_path):
 
     await admin_handlers.send_mailing_preview(message, item, settings)
 
-    message.answer_photo.assert_awaited_once()
-    assert message.answer_photo.await_args.kwargs["caption"] == item.text
+    message.edit_media.assert_awaited_once()
+    media = message.edit_media.await_args.kwargs["media"]
+    assert media.caption == f"Рассылка «Новое меню»\n\n{item.text}"
     message.answer.assert_not_awaited()
 
 
