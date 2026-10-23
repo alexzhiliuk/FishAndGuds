@@ -3,6 +3,7 @@ from app.models.entities import (
     LoyaltyAccount,
     LoyaltyTransaction,
     Mailing,
+    MailingDelivery,
     MailingRun,
     NotificationSettings,
     Purchase,
@@ -18,6 +19,7 @@ __all__ = [
     "Purchase",
     "Restaurant",
     "Mailing",
+    "MailingDelivery",
     "MailingRun",
     "NotificationSettings",
 ]

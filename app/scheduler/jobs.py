@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 from aiogram import Bot
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from app.bot.media import resolve_mailing_photo
+from app.bot.mailing_transport import send_mailing
 from app.repositories import MailingRepository, UserRepository
 from app.services import MailingService, SyncService
 
@@ -14,14 +14,6 @@ HOLIDAYS = {
     (1, 1): "С Новым годом! Желаем ярких вкусов и тёплых встреч!",
     (8, 3): "С праздником весны! Ждём вас за красивым ужином!",
 }
-
-
-async def send_message(bot, settings, uid, text, image=None):
-    photo = resolve_mailing_photo(image, settings.assets_dir)
-    if photo:
-        await bot.send_photo(uid, photo, caption=text)
-    else:
-        await bot.send_message(uid, text)
 
 
 def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
@@ -55,16 +47,27 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
 
     async def due_mailings():
         async with session_factory() as session:
-            for item in await MailingRepository(session).due(
-                datetime.now(timezone.utc)
-            ):
-                await MailingService(session).send(
-                    item.id,
-                    lambda uid, text, image: send_message(
-                        bot, settings, uid, text, image
-                    ),
-                    include_telegram_ids=settings.admin_ids,
+            due_ids = [
+                item.id
+                for item in await MailingRepository(session).due(
+                    datetime.now(timezone.utc)
                 )
+            ]
+            for item_id in due_ids:
+                try:
+                    await MailingService(session).send(
+                        item_id,
+                        lambda uid, content: send_mailing(bot, settings, uid, content),
+                        include_telegram_ids=settings.admin_ids,
+                        scheduled=True,
+                    )
+                except ValueError:
+                    logger.info(
+                        "Scheduled mailing skipped id=%s: no longer available", item_id
+                    )
+                except Exception:
+                    await session.rollback()
+                    logger.exception("Scheduled mailing failed")
 
     async def birthdays():
         now = datetime.now(ZoneInfo(settings.timezone))

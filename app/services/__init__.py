@@ -1,7 +1,7 @@
+from app.services.mailings import MailingService
 from app.services.core import (
     ApplicationSettingsService,
     LoyaltyService,
-    MailingService,
     PurchaseService,
     RestaurantService,
     SyncService,
