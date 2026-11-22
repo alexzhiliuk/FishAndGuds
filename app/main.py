@@ -16,7 +16,7 @@ from app.cache import RedisJsonCache
 from app.config import get_settings
 from app.db.session import create_session_factory
 from app.integrations.iiko.factory import create_iiko_client
-from app.scheduler.jobs import configure_scheduler
+from app.scheduler.jobs import configure_scheduler, make_birthday_schedule_refresher
 from app.services import RestaurantSyncService
 
 
@@ -102,6 +102,9 @@ async def main():
         scheduler = configure_scheduler(
             bot=bot, session_factory=factory, iiko=iiko, settings=settings
         )
+        refresh_birthday_schedule = make_birthday_schedule_refresher(scheduler, factory)
+        await refresh_birthday_schedule()
+        dp["refresh_birthday_schedule"] = refresh_birthday_schedule
         scheduler.start()
         api = create_api(
             bot=bot,

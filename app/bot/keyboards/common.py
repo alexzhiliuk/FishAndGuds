@@ -238,6 +238,39 @@ def admin_menu():
     )
 
 
+def birthday_greeting_keyboard(enabled: bool, has_image: bool):
+    rows = [
+        [InlineKeyboardButton(text="👁 Предпросмотр", callback_data="birthday:preview")],
+        [
+            InlineKeyboardButton(text="✏️ Текст", callback_data="birthday:edit_text"),
+            InlineKeyboardButton(
+                text="🖼 Изображение", callback_data="birthday:edit_image"
+            ),
+        ],
+        [InlineKeyboardButton(text="🕒 Время", callback_data="birthday:edit_time")],
+    ]
+    if has_image:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🗑 Убрать фото", callback_data="birthday:remove_photo"
+                )
+            ]
+        )
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text="⏸ Отключить" if enabled else "▶️ Включить",
+                    callback_data="birthday:disable" if enabled else "birthday:enable",
+                )
+            ],
+            [InlineKeyboardButton(text="⬅️ Назад", callback_data="admin:list")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def admin_legal_links_keyboard():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -342,6 +375,13 @@ def mailing_list_keyboard(items, page: int, has_next: bool, archived: bool = Fal
     if pagination:
         rows.append(pagination)
     if not archived:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="🎂 День рождения", callback_data="birthday:open"
+                )
+            ]
+        )
         rows.append(
             [InlineKeyboardButton(text="🗃 Архив", callback_data="mail:archive_list:0")]
         )

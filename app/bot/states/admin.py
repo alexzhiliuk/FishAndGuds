@@ -17,6 +17,12 @@ class MailingSchedule(StatesGroup):
     when = State()
 
 
+class BirthdayGreetingEdit(StatesGroup):
+    text = State()
+    image = State()
+    send_time = State()
+
+
 class RestaurantLinkEdit(StatesGroup):
     value = State()
 

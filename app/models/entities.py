@@ -1,10 +1,11 @@
 import enum
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum,
@@ -14,8 +15,10 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    Time,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -54,6 +57,19 @@ class ApplicationSetting(Base, TimestampMixin):
     __tablename__ = "application_settings"
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str | None] = mapped_column(String(1000))
+
+
+class BirthdayGreetingSettings(Base):
+    __tablename__ = "birthday_greeting_settings"
+    __table_args__ = (CheckConstraint("id = 1", name="singleton"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, server_default=true())
+    send_time: Mapped[time] = mapped_column(Time, server_default="10:00:00")
+    last_run_date: Mapped[date | None] = mapped_column(Date)
+    text: Mapped[str | None] = mapped_column(Text)
+    entities: Mapped[list[dict] | None] = mapped_column(JSON)
+    image_file_id: Mapped[str | None] = mapped_column(String(500))
 
 
 class User(Base, TimestampMixin):
