@@ -1,5 +1,6 @@
-from datetime import datetime
+from datetime import datetime, time
 import logging
+import re
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -15,6 +16,7 @@ from app.bot.keyboards.common import (
     admin_restaurant_links_keyboard,
     admin_restaurants_keyboard,
     back_keyboard,
+    birthday_greeting_keyboard,
     document_edit_keyboard,
     mailing_actions,
     mailing_input_back,
@@ -34,6 +36,7 @@ from app.bot.navigation import (
 )
 from app.bot.states import (
     ApplicationDocumentEdit,
+    BirthdayGreetingEdit,
     MailingCreate,
     MailingEdit,
     MailingSchedule,
@@ -47,6 +50,7 @@ from app.services import (
     PhoneNormalizationService,
     RestaurantService,
 )
+from app.services.birthdays import BirthdayGreetingService, NAME_PLACEHOLDER
 from app.services.mailing_content import (
     MailingContent,
     normalize_mailing_content,
@@ -194,6 +198,167 @@ async def admin_back(callback: CallbackQuery, settings: Settings):
         callback.message, "⚙️ Административное меню", reply_markup=admin_menu()
     )
     await callback.answer()
+
+
+async def show_birthday_greeting(
+    message: Message, service: BirthdayGreetingService, settings: Settings
+):
+    greeting = await service.get()
+    status = "Отправка включена" if greeting.enabled else "Отправка отключена"
+    await answer_with_buttons(
+        message,
+        f"🎂 Поздравления с днём рождения\n\n{status}.\n"
+        f"Ежедневно в {greeting.send_time:%H:%M} ({settings.timezone}).",
+        reply_markup=birthday_greeting_keyboard(
+            greeting.enabled, bool(greeting.template.image_file_id)
+        ),
+    )
+
+
+async def birthday_callback_message(
+    callback: CallbackQuery, settings: Settings
+) -> Message | None:
+    if await deny(callback, settings):
+        return None
+    if isinstance(callback.message, Message):
+        return callback.message
+    await callback.answer("Откройте раздел «День рождения» заново.", show_alert=True)
+    return None
+
+
+@router.callback_query(F.data == "birthday:open")
+async def birthday_greeting_open(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+):
+    message = await birthday_callback_message(callback, settings)
+    if message is None:
+        return
+    await callback.answer()
+    await state.clear()
+    await show_birthday_greeting(message, BirthdayGreetingService(session), settings)
+
+
+@router.callback_query(F.data == "birthday:preview")
+async def birthday_greeting_preview(
+    callback: CallbackQuery, session: AsyncSession, bot: Bot, settings: Settings
+):
+    if await deny(callback, settings):
+        return
+    greeting = await BirthdayGreetingService(session).get()
+    await callback.answer()
+    await send_mailing(
+        bot,
+        settings,
+        callback.from_user.id,
+        greeting.for_recipient(callback.from_user.first_name),
+    )
+
+
+@router.callback_query(
+    F.data.in_({"birthday:enable", "birthday:disable", "birthday:remove_photo"})
+)
+async def birthday_greeting_action(
+    callback: CallbackQuery,
+    state: FSMContext,
+    session: AsyncSession,
+    settings: Settings,
+):
+    message = await birthday_callback_message(callback, settings)
+    if message is None:
+        return
+    service = BirthdayGreetingService(session)
+    if callback.data == "birthday:remove_photo":
+        await service.set_image(None)
+    else:
+        await service.set_enabled(callback.data == "birthday:enable")
+    await callback.answer()
+    await state.clear()
+    await show_birthday_greeting(message, service, settings)
+
+
+@router.callback_query(
+    F.data.in_({"birthday:edit_text", "birthday:edit_image", "birthday:edit_time"})
+)
+async def birthday_greeting_edit(
+    callback: CallbackQuery, state: FSMContext, settings: Settings
+):
+    message = await birthday_callback_message(callback, settings)
+    if message is None:
+        return
+    await state.clear()
+    if callback.data == "birthday:edit_text":
+        await state.set_state(BirthdayGreetingEdit.text)
+        prompt = (
+            "Отправьте новый текст поздравления. "
+            f"Вместо {NAME_PLACEHOLDER} бот подставит имя гостя."
+        )
+    elif callback.data == "birthday:edit_image":
+        await state.set_state(BirthdayGreetingEdit.image)
+        prompt = "Отправьте изображение как фото."
+    else:
+        await state.set_state(BirthdayGreetingEdit.send_time)
+        prompt = (
+            f"Отправьте время в формате ЧЧ:ММ по часовому поясу {settings.timezone}. "
+            "Например, 09:30."
+        )
+    await callback.answer()
+    await answer_with_buttons(
+        message, prompt, reply_markup=mailing_input_back("birthday:open")
+    )
+
+
+@router.message(BirthdayGreetingEdit.text)
+async def birthday_greeting_save_text(
+    message: Message, state: FSMContext, session: AsyncSession, settings: Settings
+):
+    if await deny(message, settings):
+        return
+    service = BirthdayGreetingService(session)
+    try:
+        await service.set_text(message.text or "", message.entities)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await show_birthday_greeting(message, service, settings)
+
+
+@router.message(BirthdayGreetingEdit.image)
+async def birthday_greeting_save_image(
+    message: Message, state: FSMContext, session: AsyncSession, settings: Settings
+):
+    if await deny(message, settings):
+        return
+    if not message.photo:
+        await message.answer("Отправьте изображение как фото.")
+        return
+    service = BirthdayGreetingService(session)
+    try:
+        await service.set_image(message.photo[-1].file_id)
+    except ValueError as exc:
+        await message.answer(str(exc))
+        return
+    await state.clear()
+    await show_birthday_greeting(message, service, settings)
+
+
+@router.message(BirthdayGreetingEdit.send_time)
+async def birthday_greeting_save_time(
+    message: Message, state: FSMContext, session: AsyncSession, settings: Settings
+):
+    if await deny(message, settings):
+        return
+    value = (message.text or "").strip()
+    if not re.fullmatch(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]", value):
+        await message.answer("Введите время в формате ЧЧ:ММ. Например, 09:30.")
+        return
+    service = BirthdayGreetingService(session)
+    await service.set_send_time(time.fromisoformat(value))
+    await state.clear()
+    await show_birthday_greeting(message, service, settings)
 
 
 @router.callback_query(F.data == "admin:user_count")

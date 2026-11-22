@@ -8,12 +8,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.bot.mailing_transport import send_mailing
 from app.repositories import MailingRepository, UserRepository
 from app.services import MailingService, SyncService
+from app.services.birthdays import BirthdayGreetingService
 
 logger = logging.getLogger(__name__)
-HOLIDAYS = {
-    (1, 1): "С Новым годом! Желаем ярких вкусов и тёплых встреч!",
-    (8, 3): "С праздником весны! Ждём вас за красивым ужином!",
-}
 
 
 def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
@@ -72,33 +69,19 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
     async def birthdays():
         now = datetime.now(ZoneInfo(settings.timezone))
         async with session_factory() as session:
+            greeting = await BirthdayGreetingService(session).claim_for_delivery(now)
+            if greeting is None:
+                return
             for user in await UserRepository(session).birthdays(now.day, now.month):
                 try:
-                    await bot.send_message(
+                    await send_mailing(
+                        bot,
+                        settings,
                         user.telegram_id,
-                        f"🎉 {user.first_name}, поздравляем с днём рождения! Ждём вас в «Рыба и гады».",
+                        greeting.for_recipient(user.first_name),
                     )
                 except Exception:
                     logger.exception("Birthday delivery failed user_id=%s", user.id)
-            if holiday_text := HOLIDAYS.get((now.day, now.month)):
-                active_users = await UserRepository(session).active()
-                notified_ids = set()
-                for user in active_users:
-                    notified_ids.add(user.telegram_id)
-                    try:
-                        await bot.send_message(
-                            user.telegram_id,
-                            f"🎉 {user.first_name}, {holiday_text}",
-                        )
-                    except Exception:
-                        logger.exception("Holiday delivery failed user_id=%s", user.id)
-                for telegram_id in sorted(set(settings.admin_ids) - notified_ids):
-                    try:
-                        await bot.send_message(telegram_id, f"🎉 {holiday_text}")
-                    except Exception:
-                        logger.exception(
-                            "Holiday delivery failed telegram_id=%s", telegram_id
-                        )
 
     scheduler.add_job(
         due_mailings,
@@ -125,6 +108,6 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
         coalesce=True,
     )
     scheduler.add_job(
-        birthdays, "cron", hour=10, minute=0, id="birthdays", max_instances=1
+        birthdays, "cron", second=0, id="birthdays", max_instances=1, coalesce=True
     )
     return scheduler

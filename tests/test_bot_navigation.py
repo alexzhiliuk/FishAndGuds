@@ -800,6 +800,7 @@ def test_mailing_name_list_has_selection_and_pagination():
         "mail:open:6:1",
         "admin:list:0",
         "admin:list:2",
+        "birthday:open",
         "mail:archive_list:0",
         "admin:back",
     ]
@@ -1161,6 +1162,7 @@ async def test_mailing_list_shows_compact_names_before_preview(monkeypatch):
     markup = message.answer.await_args.kwargs["reply_markup"]
     assert callback_data(markup) == [
         "mail:open:5:0",
+        "birthday:open",
         "mail:archive_list:0",
         "admin:back",
     ]
