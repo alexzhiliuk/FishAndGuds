@@ -15,21 +15,20 @@ from app.services.birthdays import BirthdayGreetingService
 
 
 def inbound_message(user_id=42, **kwargs):
-    return SimpleNamespace(
+    return MagicMock(
+        spec=Message,
         from_user=SimpleNamespace(id=user_id, first_name="Ольга"),
+        reply_markup=None,
         answer=AsyncMock(),
         **kwargs,
     )
 
 
 def callback(data, user_id=42):
-    sender = SimpleNamespace(id=user_id, first_name="Ольга")
-    message = MagicMock(
-        spec=Message, from_user=sender, reply_markup=None, answer=AsyncMock()
-    )
+    message = inbound_message(user_id)
     return MagicMock(
         spec=CallbackQuery,
-        from_user=sender,
+        from_user=message.from_user,
         data=data,
         answer=AsyncMock(),
         message=message,
@@ -45,6 +44,7 @@ async def test_admin_can_edit_preview_disable_and_enable_birthday_greeting(sessi
     settings = Settings(_env_file=None, admin_ids=(42,))
     state = FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=42, user_id=42))
     service = BirthdayGreetingService(session)
+    refresh = AsyncMock()
 
     opened = callback("birthday:open")
     await admin.birthday_greeting_open(opened, state, session, settings)
@@ -71,9 +71,10 @@ async def test_admin_can_edit_preview_disable_and_enable_birthday_greeting(sessi
     assert "birthday:remove_photo" in callbacks(photo)
 
     disabled = callback("birthday:disable")
-    await admin.birthday_greeting_action(disabled, state, session, settings)
+    await admin.birthday_greeting_action(disabled, state, session, settings, refresh)
     assert "birthday:enable" in callbacks(disabled.message)
     assert not (await service.get()).enabled
+    refresh.assert_awaited_once_with()
 
     bot = SimpleNamespace(send_photo=AsyncMock())
     await admin.birthday_greeting_preview(
@@ -88,15 +89,17 @@ async def test_admin_can_edit_preview_disable_and_enable_birthday_greeting(sessi
     )
 
     await admin.birthday_greeting_action(
-        callback("birthday:remove_photo"), state, session, settings
+        callback("birthday:remove_photo"), state, session, settings, refresh
     )
     assert (await service.get()).template.image_file_id is None
+    refresh.assert_awaited_once_with()
     await admin.birthday_greeting_action(
-        callback("birthday:enable"), state, session, settings
+        callback("birthday:enable"), state, session, settings, refresh
     )
     greeting = await service.get()
     assert greeting.enabled
     assert greeting.template.text == "🎂 {name}, ждём вас!"
+    assert refresh.await_count == 2
 
 
 async def test_admin_can_change_birthday_time_after_correcting_input(session):
@@ -104,31 +107,36 @@ async def test_admin_can_change_birthday_time_after_correcting_input(session):
     state = FSMContext(MemoryStorage(), StorageKey(bot_id=1, chat_id=42, user_id=42))
     await admin.birthday_greeting_edit(callback("birthday:edit_time"), state, settings)
     service = BirthdayGreetingService(session)
+    refresh = AsyncMock()
 
     invalid = inbound_message(text="25:30")
-    await admin.birthday_greeting_save_time(invalid, state, session, settings)
+    await admin.birthday_greeting_save_time(invalid, state, session, settings, refresh)
     assert await state.get_state() == BirthdayGreetingEdit.send_time.state
     assert "ЧЧ:ММ" in invalid.answer.await_args.args[0]
     assert (await service.get()).send_time == time(10)
+    refresh.assert_not_awaited()
 
     valid = inbound_message(text="09:30")
-    await admin.birthday_greeting_save_time(valid, state, session, settings)
+    await admin.birthday_greeting_save_time(valid, state, session, settings, refresh)
     assert await state.get_state() is None
     assert (await service.get()).send_time == time(9, 30)
     assert "09:30" in valid.answer.await_args.args[0]
+    refresh.assert_awaited_once_with()
 
 
 async def test_non_admin_cannot_disable_or_edit_birthday_greetings(session):
     settings = Settings(_env_file=None, admin_ids=(42,))
     state = SimpleNamespace(clear=AsyncMock())
+    refresh = AsyncMock()
     action = callback("birthday:disable", user_id=43)
-    await admin.birthday_greeting_action(action, state, session, settings)
+    await admin.birthday_greeting_action(action, state, session, settings, refresh)
     action.answer.assert_awaited_once_with("Доступ запрещён", show_alert=True)
 
     message = inbound_message(user_id=43, text="Изменённый текст", entities=[])
     await admin.birthday_greeting_save_text(message, state, session, settings)
     message.answer.assert_awaited_once_with("Доступ запрещён")
     state.clear.assert_not_awaited()
+    refresh.assert_not_awaited()
     greeting = await BirthdayGreetingService(session).get()
     assert greeting.enabled and greeting.template.text.startswith("🎉 {name}")
 

@@ -1,4 +1,6 @@
 import logging
+from asyncio import Lock
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -11,6 +13,28 @@ from app.services import MailingService, SyncService
 from app.services.birthdays import BirthdayGreetingService
 
 logger = logging.getLogger(__name__)
+BIRTHDAY_JOB_ID = "birthdays"
+
+
+def make_birthday_schedule_refresher(
+    scheduler: AsyncIOScheduler, session_factory
+) -> Callable[[], Awaitable[None]]:
+    refresh_lock = Lock()
+
+    async def refresh() -> None:
+        async with refresh_lock, session_factory() as session:
+            greeting = await BirthdayGreetingService(session).get()
+            if greeting.enabled:
+                scheduler.reschedule_job(
+                    BIRTHDAY_JOB_ID,
+                    trigger="cron",
+                    hour=greeting.send_time.hour,
+                    minute=greeting.send_time.minute,
+                )
+            else:
+                scheduler.pause_job(BIRTHDAY_JOB_ID)
+
+    return refresh
 
 
 def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
@@ -108,6 +132,10 @@ def configure_scheduler(*, bot: Bot, session_factory, iiko, settings):
         coalesce=True,
     )
     scheduler.add_job(
-        birthdays, "cron", second=0, id="birthdays", max_instances=1, coalesce=True
+        birthdays,
+        id=BIRTHDAY_JOB_ID,
+        next_run_time=None,
+        max_instances=1,
+        coalesce=True,
     )
     return scheduler

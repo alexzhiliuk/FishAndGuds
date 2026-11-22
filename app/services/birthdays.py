@@ -1,4 +1,6 @@
-from dataclasses import dataclass
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, replace
 from datetime import datetime, time
 
 from sqlalchemy.dialects.postgresql import insert as postgres_insert
@@ -14,7 +16,9 @@ from app.services.mailing_content import (
 )
 
 NAME_PLACEHOLDER = "{name}"
-DEFAULT_TEXT = "🎉 {name}, поздравляем с днём рождения! Ждём вас в «Рыба и гады»."
+DEFAULT_TEXT = (
+    f"🎉 {NAME_PLACEHOLDER}, поздравляем с днём рождения! Ждём вас в «Рыба и гады»."
+)
 SETTINGS_ID = 1
 
 
@@ -102,39 +106,36 @@ class BirthdayGreetingService:
     @staticmethod
     def _validate(content: MailingContent) -> None:
         # User.first_name stores up to 100 Unicode characters, up to 200 UTF-16 units.
-        longest = BirthdayGreeting(True, content).for_recipient("🙂" * 100)
-        validate_mailing_content(longest)
+        longest_text = content.text.replace(NAME_PLACEHOLDER, "🙂" * 100)
+        validate_mailing_content(replace(content, text=longest_text))
+
+    @asynccontextmanager
+    async def _edit(self) -> AsyncIterator[BirthdayGreetingSettings]:
+        try:
+            yield await self._for_update()
+            await self.session.commit()
+        except Exception:
+            await self.session.rollback()
+            raise
 
     async def set_enabled(self, enabled: bool) -> None:
-        item = await self._for_update()
-        item.enabled = enabled
-        await self.session.commit()
+        async with self._edit() as item:
+            item.enabled = enabled
 
     async def set_send_time(self, send_time: time) -> None:
-        item = await self._for_update()
-        item.send_time = send_time
-        await self.session.commit()
+        async with self._edit() as item:
+            item.send_time = send_time
 
     async def claim_for_delivery(self, now: datetime) -> BirthdayGreeting | None:
         day = now.date()
         minute = now.time().replace(second=0, microsecond=0)
-
-        def is_due(
-            item: BirthdayGreetingSettings | None, greeting: BirthdayGreeting
-        ) -> bool:
-            return (
-                greeting.enabled
-                and greeting.send_time == minute
-                and (item is None or item.last_run_date != day)
-            )
-
-        item = await self.session.get(BirthdayGreetingSettings, SETTINGS_ID)
-        if not is_due(item, self._snapshot(item)):
-            return None
-
         item = await self._for_update()
         greeting = self._snapshot(item)
-        if not is_due(item, greeting):
+        if (
+            not greeting.enabled
+            or greeting.send_time != minute
+            or item.last_run_date == day
+        ):
             await self.session.rollback()
             return None
 
@@ -144,26 +145,14 @@ class BirthdayGreetingService:
         return greeting
 
     async def set_text(self, text: str, entities=None) -> None:
-        item = await self._for_update()
-        try:
+        async with self._edit() as item:
             content = normalize_mailing_content(text, entities, item.image_file_id)
             self._validate(content)
-        except ValueError:
-            await self.session.rollback()
-            raise
-        item.text = content.text
-        item.entities = content.entities
-        await self.session.commit()
+            item.text = content.text
+            item.entities = content.entities
 
     async def set_image(self, file_id: str | None) -> None:
-        item = await self._for_update()
-        content = MailingContent(
-            item.text or DEFAULT_TEXT, item.entities or [], file_id
-        )
-        try:
+        async with self._edit() as item:
+            content = replace(self._snapshot(item).template, image_file_id=file_id)
             self._validate(content)
-        except ValueError:
-            await self.session.rollback()
-            raise
-        item.image_file_id = file_id
-        await self.session.commit()
+            item.image_file_id = file_id

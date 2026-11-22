@@ -69,6 +69,46 @@ async def test_scheduled_mailings_include_admins(monkeypatch):
     assert service.send.await_args.kwargs["include_telegram_ids"] == (42,)
 
 
+async def test_birthday_schedule_reloads_updates_and_pauses(session):
+    factory = async_sessionmaker(session.bind, expire_on_commit=False)
+    settings = scheduler_settings()
+    service = BirthdayGreetingService(session)
+    await service.set_send_time(time(9, 30))
+    scheduler = jobs.configure_scheduler(
+        bot=object(), session_factory=factory, iiko=object(), settings=settings
+    )
+    refresh = jobs.make_birthday_schedule_refresher(scheduler, factory)
+
+    await refresh()
+    scheduler.start(paused=True)
+    try:
+        job = scheduler.get_job("birthdays")
+        starts_at = job.next_run_time
+        assert starts_at.time() == time(9, 30)
+        assert str(starts_at.tzinfo) == settings.timezone
+        assert (
+            job.trigger.get_next_fire_time(starts_at, starts_at) - starts_at
+        ).days == 1
+
+        await service.set_send_time(time(17, 45))
+        await refresh()
+        assert scheduler.get_job("birthdays").next_run_time.time() == time(17, 45)
+
+        await service.set_enabled(False)
+        await refresh()
+        assert scheduler.get_job("birthdays").next_run_time is None
+
+        await service.set_send_time(time(8, 10))
+        await refresh()
+        assert scheduler.get_job("birthdays").next_run_time is None
+
+        await service.set_enabled(True)
+        await refresh()
+        assert scheduler.get_job("birthdays").next_run_time.time() == time(8, 10)
+    finally:
+        scheduler.shutdown(wait=False)
+
+
 @pytest.mark.parametrize(("month", "day"), [(1, 1), (3, 8)])
 async def test_birthday_greetings_without_holiday_broadcast(
     session, monkeypatch, month, day
